@@ -1,0 +1,84 @@
+name: Android-APK bauen
+
+# Baut bei jeder Änderung auf "main" eine neue, signierte APK
+# und veröffentlicht sie unter "Releases".
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'README.md'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-apk
+  cancel-in-progress: false
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Version ermitteln
+        id: v
+        run: |
+          VERSION=$(grep -oP "APP_VERSION = '\K[^']+" www/app.js)
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "code=$GITHUB_RUN_NUMBER" >> "$GITHUB_OUTPUT"
+          echo "Version $VERSION, Build $GITHUB_RUN_NUMBER"
+
+      - name: Abhängigkeiten installieren
+        run: npm ci
+
+      - name: Android-Projekt erzeugen
+        run: |
+          npx cap add android
+          cp -r android-res/. android/app/src/main/res/
+          sed -i -E "s/versionCode [0-9]+/versionCode ${{ steps.v.outputs.code }}/" android/app/build.gradle
+          sed -i -E "s/versionName \"[^\"]*\"/versionName \"${{ steps.v.outputs.version }}\"/" android/app/build.gradle
+          grep -E "versionCode|versionName" android/app/build.gradle
+          npx cap sync android
+
+      - name: APK bauen
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon --stacktrace
+
+      - name: APK signieren
+        run: |
+          BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          echo "Build-Tools: $BT"
+          "$BT/zipalign" -p -f 4 android/app/build/outputs/apk/release/app-release-unsigned.apk aligned.apk
+          "$BT/apksigner" sign \
+            --ks android-signing/orbit-release.p12 --ks-type PKCS12 \
+            --ks-pass pass:orbit-release --key-pass pass:orbit-release --ks-key-alias orbit \
+            --out "Orbit-${{ steps.v.outputs.version }}.apk" aligned.apk
+          "$BT/apksigner" verify --print-certs "Orbit-${{ steps.v.outputs.version }}.apk"
+
+      - name: Release veröffentlichen
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.v.outputs.version }}-build.${{ steps.v.outputs.code }}
+          name: Orbit ${{ steps.v.outputs.version }} (Build ${{ steps.v.outputs.code }})
+          make_latest: true
+          files: Orbit-${{ steps.v.outputs.version }}.apk
+          body: |
+            **Installieren:** Unten unter „Assets“ die Datei `Orbit-${{ steps.v.outputs.version }}.apk` am Handy herunterladen und öffnen. Beim ersten Mal fragt Android, ob dein Browser Apps installieren darf – das erlauben.
+
+            **Update:** Neue APK einfach drüber installieren – **nicht** vorher deinstallieren. Deine Einträge bleiben erhalten.

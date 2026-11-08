@@ -1,14 +1,18 @@
-/* Orbit – Kalender, To-dos, Listen, Training & Personen
- * Alle Daten liegen lokal im Browser (localStorage, Schlüssel "orbit-data").
- * Updates der App ändern nur die Programmdateien – deine Daten bleiben erhalten.
+/* Orbit – Kalender, To-dos, Listen, Training & Personen (Android-App)
+ * Alle Daten liegen lokal auf dem Gerät (Speicher der App, Schlüssel "orbit-data").
+ * Ein APK-Update ändert nur die Programmdateien – deine Daten bleiben erhalten,
+ * solange die App mit demselben Schlüssel signiert ist (android-signing/).
  * Wenn sich das Datenformat einmal ändert, hebt migrate() alte Daten automatisch an.
  */
 'use strict';
 (function () {
-  const APP_VERSION = '1.0.0';
+  const APP_VERSION = '1.1.0';
   const STORE_KEY = 'orbit-data';
   const SAFETY_KEY = 'orbit-data-sicherung';
   const DATA_VERSION = 1;
+  const CAP = window.Capacitor;
+  const NATIVE = !!(CAP && CAP.isNativePlatform && CAP.isNativePlatform());
+  const plugin = (name) => (NATIVE && CAP.Plugins ? CAP.Plugins[name] : null);
 
   // ---------- Hilfsfunktionen ----------
   const $ = (s, r = document) => r.querySelector(s);
@@ -478,7 +482,7 @@
       '<div class="btn-col"><button type="button" class="btn secondary" data-act="export">' + icon('download') + 'Backup speichern</button>' +
       '<button type="button" class="btn secondary" data-act="import">' + icon('upload') + 'Backup einspielen</button>' +
       '<button type="button" class="btn ' + (ui.resetArmed ? 'armed' : 'danger') + '" data-act="reset-all">' + icon('trash') + (ui.resetArmed ? 'Wirklich alles löschen? Nochmal tippen' : 'Alle Daten löschen') + '</button></div></section>' +
-      '<div class="about"><img src="icons/icon-192.png" alt=""><b style="color:var(--text)">Orbit</b><span>Version ' + APP_VERSION + '</span></div>';
+      '<div class="about"><img src="icons/app-icon.png" alt=""><b style="color:var(--text)">Orbit</b><span>Version ' + APP_VERSION + '</span></div>';
   }
 
   function screenHtml() {
@@ -831,8 +835,8 @@
     const html = document.documentElement;
     if (animate) { html.classList.add('theme-anim'); setTimeout(() => html.classList.remove('theme-anim'), 420); }
     html.dataset.theme = t;
-    $('#theme-color').setAttribute('content', t === 'dark' ? '#020A2E' : '#F4F4F1');
-    $('#status-style').setAttribute('content', t === 'dark' ? 'black-translucent' : 'default');
+    const bars = plugin('SystemBars');
+    if (bars && bars.setStyle) bars.setStyle({ style: t === 'dark' ? 'DARK' : 'LIGHT' }).catch(() => {});
   }
   if (mq.addEventListener) mq.addEventListener('change', () => { if ((data.settings.theme || 'system') === 'system') applyTheme(true); });
 
@@ -841,6 +845,13 @@
     const json = JSON.stringify(Object.assign({ exportiert: new Date().toISOString(), app: 'Orbit ' + APP_VERSION }, data), null, 2);
     const name = 'orbit-backup-' + ymd(today()) + '.json';
     const blob = new Blob([json], { type: 'application/json' });
+    const fsys = plugin('Filesystem'), share = plugin('Share');
+    if (fsys && share) {
+      fsys.writeFile({ path: name, data: json, directory: 'CACHE', encoding: 'utf8' })
+        .then((r) => share.share({ title: 'Orbit-Backup', files: [r.uri], dialogTitle: 'Backup speichern oder teilen' }))
+        .catch((e) => { if (!/cancel/i.test(String(e && e.message))) toast('Backup konnte nicht geteilt werden.'); });
+      return;
+    }
     try {
       const file = new File([blob], name, { type: 'application/json' });
       if (navigator.canShare && navigator.canShare({ files: [file] }) && /iPhone|iPad|Android/i.test(navigator.userAgent)) {
@@ -1100,14 +1111,20 @@
   show('fade');
   persist();
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
+  document.addEventListener('contextmenu', (e) => { if (!e.target.closest('input, textarea')) e.preventDefault(); });
   // Tageswechsel (App bleibt offen über Mitternacht)
   let lastDay = ymd(today());
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible' && ymd(today()) !== lastDay) { lastDay = ymd(today()); ui.selDay = ''; show('none'); }
   });
-  if ('serviceWorker' in navigator && location.protocol !== 'file:') {
-    const hadController = !!navigator.serviceWorker.controller;
-    navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' }).catch(() => {});
-    navigator.serviceWorker.addEventListener('controllerchange', () => { if (hadController) toast('Orbit wurde aktualisiert – deine Daten sind noch da.'); });
+  const appPlugin = plugin('App');
+  if (appPlugin) {
+    appPlugin.addListener('backButton', () => {
+      if (ui.sheet) closeSheet();
+      else if (ui.stack.length) back();
+      else if (ui.tab !== 'heute') switchTab('heute');
+      else if (appPlugin.minimizeApp) appPlugin.minimizeApp(); else appPlugin.exitApp();
+    });
+    appPlugin.addListener('resume', () => { if (ymd(today()) !== lastDay) { lastDay = ymd(today()); ui.selDay = ''; show('none'); } });
   }
 })();

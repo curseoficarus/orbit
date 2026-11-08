@@ -1,0 +1,16 @@
+{
+  "name": "orbit",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "@capacitor/android": "^8.6.0",
+    "@capacitor/app": "^8.1.2",
+    "@capacitor/core": "^8.6.0",
+    "@capacitor/filesystem": "^8.1.5",
+    "@capacitor/share": "^8.0.3"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.6.0"
+  },
+  "description": "Orbit \u2013 Kalender, To-dos, Listen, Training und Personen"
+}
