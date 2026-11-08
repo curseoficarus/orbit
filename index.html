@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Orbit</title>
+<meta name="description" content="Orbit – Kalender, To-dos, Listen, Trainingspläne und Personen in einer App.">
+<meta name="theme-color" content="#F4F4F1" id="theme-color">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default" id="status-style">
+<meta name="apple-mobile-web-app-title" content="Orbit">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="64x64" href="icons/icon-64.png">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap">
+<link rel="stylesheet" href="styles.css">
+<script>
+  // Theme früh setzen, damit beim Start nichts aufblitzt
+  (function () {
+    try {
+      var d = JSON.parse(localStorage.getItem('orbit-data') || '{}');
+      var t = (d.settings && d.settings.theme) || 'system';
+      if (t === 'system') t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+      document.documentElement.dataset.theme = t;
+    } catch (e) { document.documentElement.dataset.theme = 'light'; }
+  })();
+</script>
+</head>
+<body>
+<div id="app">
+  <main id="stage" aria-live="polite"></main>
+  <button id="fab" class="fab" type="button" data-act="fab" aria-label="Neuer Eintrag">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+  </button>
+  <nav id="tabbar" aria-label="Hauptnavigation"></nav>
+  <div id="toast" role="status" aria-live="polite"></div>
+  <div id="sheet-root"></div>
+  <input type="file" id="import-file" accept="application/json,.json" hidden>
+</div>
+<noscript>Orbit braucht JavaScript.</noscript>
+<script src="app.js"></script>
+</body>
+</html>
