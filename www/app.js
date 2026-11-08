@@ -6,7 +6,7 @@
  */
 'use strict';
 (function () {
-  const APP_VERSION = '1.1.0';
+  const APP_VERSION = '1.2.0';
   const STORE_KEY = 'orbit-data';
   const SAFETY_KEY = 'orbit-data-sicherung';
   const DATA_VERSION = 1;
@@ -34,6 +34,16 @@
   const REP = { none: '', daily: 'täglich', weekly: 'wöchentlich', monthly: 'monatlich', yearly: 'jährlich' };
   const fmtDay = (d) => WDL[wdOf(d)] + ', ' + d.getDate() + '. ' + MON[d.getMonth()];
   const fmtShort = (d) => WD[wdOf(d)] + '. ' + d.getDate() + '. ' + MONS[d.getMonth()];
+  const fmtDays = (days) => {
+    const on = WD.map((_, i) => !!(days && days[i]));
+    const n = on.filter(Boolean).length;
+    if (!n) return '';
+    if (n === 7) return 'täglich';
+    const first = on.indexOf(true), last = on.lastIndexOf(true);
+    if (n >= 3 && last - first + 1 === n) return WD[first] + '–' + WD[last];
+    return WD.filter((_, i) => on[i]).join(', ');
+  };
+  const repLabel = (it) => (it.repeat === 'weekly' && (it.repeatDays || []).some(Boolean) ? fmtDays(it.repeatDays) : REP[it.repeat] || '');
   const fmtLong = (d) => d.getDate() + '. ' + MON[d.getMonth()] + ' ' + d.getFullYear();
 
   const PALETTE = [
@@ -90,7 +100,8 @@
       { id: 't-arzt', name: 'Arzt', color: 'tuerkis' },
       { id: 't-geburtstag', name: 'Geburtstag', color: 'pink', system: 'birthday' },
       { id: 't-haushalt', name: 'Haushalt', color: 'lila' },
-      { id: 't-training', name: 'Training', color: 'gruen', system: 'training' }
+      { id: 't-training', name: 'Training', color: 'gruen', system: 'training' },
+      { id: 't-urlaub', name: 'Urlaub', color: 'gelb', system: 'vacation' }
     ];
   }
   function defaultData() {
@@ -104,7 +115,8 @@
     out.settings = Object.assign({ theme: 'system' }, d.settings || {});
     if (!out.tags.some((t) => t.system === 'birthday')) out.tags.push(defaultTags()[3]);
     if (!out.tags.some((t) => t.system === 'training')) out.tags.push(defaultTags()[5]);
-    out.items = out.items.filter((x) => x && x.id).map((x) => Object.assign({ type: 'aufgabe', title: '', date: '', time: '', end: '', repeat: 'none', tagId: '', listId: '' }, x));
+    if (!out.tags.some((t) => t.system === 'vacation')) out.tags.push(defaultTags()[6]);
+    out.items = out.items.filter((x) => x && x.id).map((x) => Object.assign({ type: 'aufgabe', title: '', date: '', endDate: '', time: '', end: '', repeat: 'none', repeatDays: null, pauseVacation: false, tagId: '', listId: '' }, x));
     out.plans = out.plans.filter((x) => x && x.id).map((p) => Object.assign({ name: '', start: '', end: '', time: '', dur: '', notes: '' }, p, { days: Array.isArray(p.days) ? WD.map((_, i) => !!p.days[i]) : WD.map(() => false) }));
     out.people = out.people.filter((x) => x && x.id).map((p) => Object.assign({ name: '', birthday: '', phone: '', email: '', address: '', note: '' }, p));
     out.lists = out.lists.filter((x) => x && x.id).map((l) => Object.assign({ name: '', color: 'grau' }, l));
@@ -158,22 +170,33 @@
     if (ymd(d) === it.date) return true;
     switch (it.repeat) {
       case 'daily': return true;
-      case 'weekly': return wdOf(d) === wdOf(b);
+      case 'weekly': return (it.repeatDays || []).some(Boolean) ? !!it.repeatDays[wdOf(d)] : wdOf(d) === wdOf(b);
       case 'monthly': return d.getDate() === b.getDate();
       case 'yearly': return d.getDate() === b.getDate() && d.getMonth() === b.getMonth();
       default: return false;
     }
   }
+  const vacations = () => data.items.filter((it) => it.type === 'urlaub' && isDate(it.date));
+  const onVacation = (s) => vacations().some((v) => s >= v.date && s <= (v.endDate || v.date));
   function rawFor(d) {
     const s = ymd(d), out = [];
-    data.items.forEach((it) => { if (it.date && occurs(it, d)) out.push({ kind: it.type, it, key: it.id + '|' + s, time: it.time || '', d }); });
+    const vac = onVacation(s);
+    data.items.forEach((it) => {
+      if (it.type === 'urlaub') {
+        if (isDate(it.date) && s >= it.date && s <= (it.endDate || it.date)) out.push({ kind: 'urlaub', it, key: it.id + '|' + s, time: '', d });
+        return;
+      }
+      if (!it.date || !occurs(it, d)) return;
+      if (vac && it.pauseVacation && it.repeat && it.repeat !== 'none') return;
+      out.push({ kind: it.type, it, key: it.id + '|' + s, time: it.time || '', d });
+    });
     data.people.forEach((p) => {
       if (!isDate(p.birthday)) return;
       const b = parseD(p.birthday);
       if (b.getMonth() === d.getMonth() && b.getDate() === d.getDate() && d >= b) out.push({ kind: 'geburtstag', p, key: 'bd' + p.id + '|' + s, time: '', age: d.getFullYear() - b.getFullYear(), d });
     });
     data.plans.forEach((pl) => { if (s >= pl.start && s <= pl.end && pl.days[wdOf(d)]) out.push({ kind: 'training', pl, key: 'pl' + pl.id + '|' + s, time: pl.time || '', d }); });
-    const rank = (r) => (r.kind === 'geburtstag' ? 0 : 1);
+    const rank = (r) => (r.kind === 'urlaub' ? 0 : r.kind === 'geburtstag' ? 1 : 2);
     out.sort((a, b) => (rank(a) - rank(b)) || (a.time || '99').localeCompare(b.time || '99'));
     return out;
   }
@@ -203,16 +226,20 @@
     if (r.kind === 'termin') {
       left = r.it.time || 'ganzt.'; title = r.it.title; act = 'item-open'; id = r.it.id;
       if (r.it.time && r.it.end) meta.push(r.it.time + '–' + r.it.end);
-      if (REP[r.it.repeat]) meta.push(REP[r.it.repeat]);
+      if (repLabel(r.it)) meta.push(repLabel(r.it));
       if (r.it.listId && !opts.inList && listById(r.it.listId)) meta.push(listById(r.it.listId).name);
       tag = tagById(r.it.tagId);
     } else if (r.kind === 'aufgabe') {
       box = true; title = r.it.title; act = 'item-open'; id = r.it.id;
       if (opts.overdue) meta.push('überfällig seit ' + fmtShort(r.d));
       if (r.it.time) meta.push('bis ' + r.it.time);
-      if (REP[r.it.repeat]) meta.push(REP[r.it.repeat]);
+      if (repLabel(r.it)) meta.push(repLabel(r.it));
       if (r.it.listId && !opts.inList && listById(r.it.listId)) meta.push('Liste ' + listById(r.it.listId).name);
       tag = tagById(r.it.tagId);
+    } else if (r.kind === 'urlaub') {
+      left = 'ganzt.'; title = r.it.title || 'Urlaub'; act = 'item-open'; id = r.it.id;
+      meta.push(fmtShort(parseD(r.it.date)) + ' – ' + fmtShort(parseD(r.it.endDate || r.it.date)));
+      tag = tagSys('vacation');
     } else if (r.kind === 'geburtstag') {
       left = 'ganzt.'; title = r.p.name + ' hat Geburtstag'; act = 'person-open'; id = r.p.id;
       meta.push('wird ' + r.age);
@@ -254,7 +281,7 @@
       '</div>';
   }
   function emptyState(ic, title, text, btn, act) {
-    return '<div class="empty"><span class="empty-icon">' + icon(ic) + '</span><b>' + esc(title) + '</b><p>' + esc(text) + '</p>' +
+    return '<div class="empty"><span class="empty-icon">' + icon(ic) + '</span><b>' + esc(title) + '</b>' +
       (btn ? '<button type="button" class="btn primary" data-act="' + act + '">' + esc(btn) + '</button>' : '') + '</div>';
   }
   const initials = (name) => String(name).trim().split(/\s+/).slice(0, 2).map((x) => x.charAt(0).toUpperCase()).join('') || '?';
@@ -281,8 +308,7 @@
       html += '<section class="group"><h2 class="group-label">' + esc(i === 0 ? 'Heute' : fmtDay(d)) + '</h2><div class="card list">' + raws.map((r) => rowHtml(r)).join('') + '</div></section>';
     });
     if (!count && !od.length) {
-      const what = ui.range === 'tag' ? 'heute' : (ui.range === 'woche' ? 'diese Woche' : 'diesen Monat');
-      html = emptyState('sun', 'Für ' + what + ' ist nichts geplant', 'Lege einen Termin oder eine Aufgabe an – Trainings und Geburtstage erscheinen hier automatisch.', 'Eintrag anlegen', 'fab');
+      html = emptyState('sun', 'Nichts geplant', '', 'Eintrag anlegen', 'fab');
     }
     const title = ui.range === 'tag' ? 'Heute' : (ui.range === 'woche' ? 'Diese Woche' : 'Dieser Monat');
     const anim = ui.contentAnim; ui.contentAnim = '';
@@ -307,6 +333,7 @@
       const dots = raws.slice(0, 3).map((r) => {
         let tg = null;
         if (r.kind === 'geburtstag') tg = tagSys('birthday');
+        else if (r.kind === 'urlaub') tg = tagSys('vacation');
         else if (r.kind === 'training') tg = tagSys('training');
         else tg = tagById(r.it.tagId);
         return '<i style="--tc:' + (tg ? colorHex(tg.color) : 'var(--muted)') + '"></i>';
@@ -326,7 +353,7 @@
       '<section class="group"><h2 class="group-label">' + esc(fmtDay(sd)) + '</h2>' +
       (raws.length
         ? '<div class="card list">' + raws.map((r) => rowHtml(r)).join('') + '</div>'
-        : '<div class="card hint">Keine Einträge an diesem Tag. Mit dem Plus-Button legst du einen an.</div>') +
+        : '<div class="card hint">Keine Einträge</div>') +
       '</section>';
   }
 
@@ -349,9 +376,9 @@
     }).join('');
     return topBar() +
       '<div class="title-row"><h1 class="big">Listen</h1><button type="button" class="pill" data-act="list-new">' + icon('plus') + 'Neue Liste</button></div>' +
-      '<div class="tiles">' + tiles.map((t) => '<button type="button" class="tile' + (t[4] ? ' dark' : '') + '" data-act="smart" data-v="' + t[0] + '"><span class="count">' + t[3] + '</span><b>' + t[1] + '</b><small>' + esc(t[2]) + '</small></button>').join('') + '</div>' +
+      '<div class="tiles">' + tiles.map((t) => '<button type="button" class="tile' + (t[4] ? ' dark' : '') + '" data-act="smart" data-v="' + t[0] + '"><span class="count">' + t[3] + '</span><b>' + t[1] + '</b></button>').join('') + '</div>' +
       '<section class="group"><h2 class="group-label">Meine Listen</h2>' +
-      (lists ? '<div class="card links">' + lists + '</div>' : '<div class="card hint">Noch keine Listen. Lege z. B. „Einkauf“, „Haushalt“ oder „Geschenkideen“ an.</div>') +
+      (lists ? '<div class="card links">' + lists + '</div>' : '<div class="card hint">Noch keine Listen</div>') +
       '</section>';
   }
 
@@ -366,9 +393,9 @@
       .concat(und.map((it) => rowHtml({ kind: 'aufgabe', it, key: it.id + '|-', d: null }, { inList: !irg })));
     const actions = irg ? '' : '<button type="button" class="pill" data-act="list-edit" data-id="' + id + '">' + icon('edit') + 'Bearbeiten</button><button type="button" class="pill danger" data-act="list-del" data-id="' + id + '">Löschen</button>';
     return navBar('Listen', actions) +
-      '<div class="title-block"><h1 class="big">' + esc(irg ? 'Irgendwann' : l.name) + '</h1><span class="sub">' + (irg ? 'Alle Aufgaben ohne Datum' : dated.length + ' mit Datum · ' + und.length + ' ohne Datum') + '</span></div>' +
-      '<form class="card quick" data-form="quick" data-list="' + (irg ? '' : id) + '"><label class="vh" for="quick-input">Neue Aufgabe</label><input id="quick-input" name="t" autocomplete="off" placeholder="Aufgabe ohne Datum hinzufügen …" enterkeyhint="done"><button type="submit" aria-label="Hinzufügen">' + icon('plus') + '</button></form>' +
-      (rows.length ? '<div class="card list">' + rows.join('') + '</div>' : '<div class="card hint">Noch leer. Aufgaben mit Datum legst du über den Plus-Button an – sie erscheinen dann auch im Kalender.</div>');
+      '<div class="title-block"><h1 class="big">' + esc(irg ? 'Irgendwann' : l.name) + '</h1></div>' +
+      '<form class="card quick" data-form="quick" data-list="' + (irg ? '' : id) + '"><label class="vh" for="quick-input">Neue Aufgabe</label><input id="quick-input" name="t" autocomplete="off" placeholder="Aufgabe hinzufügen …" enterkeyhint="done"><button type="submit" aria-label="Hinzufügen">' + icon('plus') + '</button></form>' +
+      (rows.length ? '<div class="card list">' + rows.join('') + '</div>' : '<div class="card hint">Noch leer</div>');
   }
 
   function planStats(pl) {
@@ -392,7 +419,7 @@
     }).join('');
     return topBar() +
       '<div class="title-row"><h1 class="big">Training</h1><button type="button" class="pill" data-act="plan-new">' + icon('plus') + 'Neuer Plan</button></div>' +
-      (cards || emptyState('dumbbell', 'Noch kein Trainingsplan', 'Wähle einen Zeitraum und deine Trainingstage. Jede Einheit erscheint im Kalender und unter „Heute“ zum Abhaken.', 'Plan erstellen', 'plan-new'));
+      (cards || emptyState('dumbbell', 'Noch kein Trainingsplan', '', 'Plan erstellen', 'plan-new'));
   }
 
   function scrPlanDetail(id) {
@@ -414,7 +441,7 @@
       '<span class="bar' + grow + '" style="--w:' + st.pct + '%"><span></span></span><span class="muted">' + st.dn + ' von ' + st.ss.length + ' Einheiten erledigt · ' + st.pct + ' %</span></div>' +
       '<section class="group"><h2 class="group-label">Alle Einheiten</h2><div class="card list">' + (rows || '<div class="hint">Keine Einheiten im Zeitraum.</div>') + '</div></section>' +
       '<section class="group"><h2 class="group-label"><label for="plan-notes">Übungen &amp; Notizen</label></h2>' +
-      '<textarea id="plan-notes" class="input notes" data-autosave="plan-notes" data-id="' + id + '" placeholder="z. B.&#10;Kniebeugen 3 × 10&#10;Bankdrücken 3 × 8&#10;Plank 3 × 45 s">' + esc(pl.notes) + '</textarea>' +
+      '<textarea id="plan-notes" class="input notes" data-autosave="plan-notes" data-id="' + id + '" placeholder="Übungen …">' + esc(pl.notes) + '</textarea>' +
       '<span class="saved-note" id="notes-saved">Gespeichert</span></section>';
   }
 
@@ -441,7 +468,7 @@
     return topBar() +
       '<div class="title-row"><h1 class="big">Personen</h1><button type="button" class="pill" data-act="person-new">' + icon('plus') + 'Person</button></div>' +
       (people.length ? bdays + '<section class="group"><h2 class="group-label">Alle · ' + people.length + '</h2><div class="card links">' + rows + '</div></section>'
-        : emptyState('people', 'Noch keine Personen', 'Mit Geburtsdatum erscheint der Geburtstag jedes Jahr automatisch im Kalender.', 'Person hinzufügen', 'person-new'));
+        : emptyState('people', 'Noch keine Personen', '', 'Person hinzufügen', 'person-new'));
   }
 
   function scrPersonDetail(id) {
@@ -458,27 +485,26 @@
     if (isDate(p.birthday)) {
       const b = parseD(p.birthday), nb = nextBirthday(b);
       const diff = Math.round((nb - today()) / 86400000), age = nb.getFullYear() - b.getFullYear();
-      bd = '<div class="bday-card">' + icon('gift') + '<span style="display:flex;flex-direction:column;gap:2px"><b>' + (diff === 0 ? 'Geburtstag heute · wird ' + age : 'Geburtstag in ' + diff + (diff === 1 ? ' Tag' : ' Tagen') + ' · wird ' + age) + '</b><small>' + esc(fmtLong(b)) + ' · steht jedes Jahr im Kalender</small></span></div>';
+      bd = '<div class="bday-card">' + icon('gift') + '<span style="display:flex;flex-direction:column;gap:2px"><b>' + (diff === 0 ? 'Geburtstag heute · wird ' + age : 'Geburtstag in ' + diff + (diff === 1 ? ' Tag' : ' Tagen') + ' · wird ' + age) + '</b><small>' + esc(fmtLong(b)) + '</small></span></div>';
     }
     const f = [['Telefon', p.phone], ['E-Mail', p.email], ['Adresse', p.address], ['Notiz', p.note]].filter((x) => x[1]);
     return navBar('Personen', '<button type="button" class="pill" data-act="person-edit" data-id="' + id + '">' + icon('edit') + 'Bearbeiten</button><button type="button" class="pill danger" data-act="person-del" data-id="' + id + '">Löschen</button>') +
       '<div class="person-head">' + avatar(p, 88) + '<h1 class="big" style="font-size:28px">' + esc(p.name) + '</h1></div>' +
       (qa.length ? '<div class="qa-row">' + qa.join('') + '</div>' : '') + bd +
       (f.length ? '<div class="card fields">' + f.map((x) => '<div class="frow"><span>' + x[0] + '</span><b>' + esc(x[1]) + '</b></div>').join('') + '</div>'
-        : '<div class="card hint">Noch keine Kontaktdaten. Tippe auf „Bearbeiten“, um Telefon, E-Mail oder Adresse einzutragen.</div>');
+        : '');
   }
 
   function scrSettings() {
     const theme = data.settings.theme || 'system';
     const tags = data.tags.map((t) => '<button type="button" class="setting-row" data-act="tag-edit" data-id="' + t.id + '"><span class="big-dot" style="--tc:' + colorHex(t.color) + '"></span><span class="grow">' + tagChip(t) +
-      (t.system ? '<small style="margin-top:4px">' + (t.system === 'birthday' ? 'für Geburtstage aus Personen' : 'für Trainingseinheiten') + '</small>' : '') + '</span>' + icon('chevR', 'chev') + '</button>').join('');
+'</span>' + icon('chevR', 'chev') + '</button>').join('');
     return navBar('Zurück', '') +
       '<h1 class="big">Einstellungen</h1>' +
       '<section class="group"><h2 class="group-label">Darstellung</h2>' + seg('theme', [['light', 'Hell'], ['dark', 'Dunkel'], ['system', 'Automatisch']], theme, 'theme') + '</section>' +
       '<section class="group"><h2 class="group-label">Tags</h2><div class="card links">' + tags + '</div>' +
       '<button type="button" class="btn secondary" data-act="tag-new">' + icon('plus') + 'Tag hinzufügen</button></section>' +
-      '<section class="group"><h2 class="group-label">Deine Daten</h2>' +
-      '<p class="data-note" style="margin:0">Alles, was du einträgst, bleibt auf diesem Gerät gespeichert – auch wenn die App ein Update bekommt. Für einen Gerätewechsel oder zur Sicherheit kannst du ein Backup speichern.</p>' +
+      '<section class="group"><h2 class="group-label">Backup</h2>' +
       '<div class="btn-col"><button type="button" class="btn secondary" data-act="export">' + icon('download') + 'Backup speichern</button>' +
       '<button type="button" class="btn secondary" data-act="import">' + icon('upload') + 'Backup einspielen</button>' +
       '<button type="button" class="btn ' + (ui.resetArmed ? 'armed' : 'danger') + '" data-act="reset-all">' + icon('trash') + (ui.resetArmed ? 'Wirklich alles löschen? Nochmal tippen' : 'Alle Daten löschen') + '</button></div></section>' +
@@ -677,32 +703,48 @@
   const swatches = (cur) => '<div class="swatches" data-group="color">' + PALETTE.map((p) => '<button type="button" class="swatch' + (p.id === cur ? ' on' : '') + '" style="--tc:' + p.c + '" data-act="f-set" data-f="color" data-v="' + p.id + '" aria-label="' + p.name + '" aria-pressed="' + (p.id === cur) + '">' + icon('tick') + '</button>').join('') + '</div>';
 
   function entryForm(f) {
+    const vac = f.type === 'urlaub';
     const task = f.type === 'aufgabe';
     const noDate = task && f.noDate;
-    let h = seg('type', [['termin', 'Termin'], ['aufgabe', 'Aufgabe']], f.type, 'f-type');
-    h += field('Titel', 'title', f.title, 'text', task ? 'z. B. Rezept abholen' : 'z. B. Zahnarzt', { big: true, autofocus: true, attrs: 'autocomplete="off" enterkeyhint="done"' });
-    if (task) h += '<button type="button" class="switch-row" role="switch" aria-checked="' + !!noDate + '" data-act="f-toggle" data-f="noDate"><span>Ohne Datum<small>landet unter „Irgendwann“</small></span><span class="switch"></span></button>';
+    let h = seg('type', [['termin', 'Termin'], ['aufgabe', 'Aufgabe'], ['urlaub', 'Urlaub']], f.type, 'f-type');
+    if (vac) {
+      h += field('Titel', 'title', f.title, 'text', 'Urlaub', { big: true, autofocus: true, attrs: 'autocomplete="off" enterkeyhint="done"' });
+      h += '<div class="two">' + field('Von', 'date', f.date, 'date') + field('Bis', 'endDate', f.endDate, 'date') + '</div>';
+      return h;
+    }
+    h += field('Titel', 'title', f.title, 'text', task ? 'Aufgabe' : 'Termin', { big: true, autofocus: true, attrs: 'autocomplete="off" enterkeyhint="done"' });
+    if (task) h += '<button type="button" class="switch-row" role="switch" aria-checked="' + !!noDate + '" data-act="f-toggle" data-f="noDate"><span>Ohne Datum</span><span class="switch"></span></button>';
     if (!noDate) {
       h += '<div class="two">' + field('Datum', 'date', f.date, 'date') + clearable(task ? 'Bis (optional)' : 'Beginn (optional)', 'time', f.time, 'time') + '</div>';
-      if (!task) h += clearable('Ende (optional)', 'end', f.end, 'time', 'Ohne Uhrzeit gilt der Termin als ganztägig.');
+      if (!task) h += clearable('Ende (optional)', 'end', f.end, 'time');
       h += '<label class="field"><span>Wiederholen</span><select class="input" data-f="repeat">' +
         [['none', 'Nie'], ['daily', 'Täglich'], ['weekly', 'Wöchentlich'], ['monthly', 'Monatlich'], ['yearly', 'Jährlich']].map((o) => '<option value="' + o[0] + '"' + (f.repeat === o[0] ? ' selected' : '') + '>' + o[1] + '</option>').join('') + '</select></label>';
+      if (f.repeat === 'weekly') {
+        const rd = f.repeatDays || [];
+        h += '<div class="field"><span class="label">Wochentage</span><div class="days">' + WD.map((d, i) => '<button type="button" class="chip' + (rd[i] ? ' on' : '') + '" data-act="f-day" data-f="repeatDays" data-i="' + i + '" aria-pressed="' + !!rd[i] + '">' + d + '</button>').join('') + '</div></div>';
+      }
+      if (f.repeat && f.repeat !== 'none') h += '<button type="button" class="switch-row" role="switch" aria-checked="' + !!f.pauseVacation + '" data-act="f-toggle" data-f="pauseVacation"><span>Im Urlaub aussetzen</span><span class="switch"></span></button>';
     }
-    h += '<div class="field"><span class="label">Tag</span>' + chipGroup('tagId', [{ v: '', label: 'Kein Tag', color: 'grau' }].concat(data.tags.map((t) => ({ v: t.id, label: t.name, color: t.color }))), f.tagId || '') +
-      '<small style="font-size:12px;color:var(--muted)">Tags bearbeitest du in den Einstellungen (Zahnrad oben rechts).</small></div>';
+    h += '<div class="field"><span class="label">Tag</span>' + chipGroup('tagId', [{ v: '', label: 'Kein Tag', color: 'grau' }].concat(data.tags.filter((t) => t.system !== 'vacation').map((t) => ({ v: t.id, label: t.name, color: t.color }))), f.tagId || '') + '</div>';
     h += '<div class="field"><span class="label">Liste</span>' + chipGroup('listId', [{ v: '', label: 'Keine Liste' }].concat(data.lists.map((l) => ({ v: l.id, label: l.name, color: l.color }))), f.listId || '') + '</div>';
     return h;
   }
   function entryView(f) {
     const it = itemById(f.id);
-    if (!it) return '<div class="hint">Dieser Eintrag existiert nicht mehr.</div>';
-    const rows = [['Art', it.type === 'termin' ? 'Termin' : 'Aufgabe'], ['Datum', it.date ? fmtDay(parseD(it.date)) + ' ' + parseD(it.date).getFullYear() : 'ohne Datum (Irgendwann)']];
-    if (it.time) rows.push([it.type === 'termin' ? 'Uhrzeit' : 'Bis', it.time + (it.end ? ' – ' + it.end : '')]);
-    else if (it.date && it.type === 'termin') rows.push(['Uhrzeit', 'ganztägig']);
-    if (REP[it.repeat]) rows.push(['Wiederholung', REP[it.repeat]]);
-    const tg = tagById(it.tagId);
-    if (it.listId && listById(it.listId)) rows.push(['Liste', listById(it.listId).name]);
-    return '<span class="detail-title">' + esc(it.title) + '</span>' + (tg ? '<div>' + tagChip(tg) + '</div>' : '') +
+    if (!it) return '<div class="hint">Eintrag nicht gefunden</div>';
+    let rows;
+    if (it.type === 'urlaub') {
+      rows = [['Art', 'Urlaub'], ['Von', fmtDay(parseD(it.date)) + ' ' + parseD(it.date).getFullYear()], ['Bis', fmtDay(parseD(it.endDate || it.date)) + ' ' + parseD(it.endDate || it.date).getFullYear()]];
+    } else {
+      rows = [['Art', it.type === 'termin' ? 'Termin' : 'Aufgabe'], ['Datum', it.date ? fmtDay(parseD(it.date)) + ' ' + parseD(it.date).getFullYear() : 'ohne Datum']];
+      if (it.time) rows.push([it.type === 'termin' ? 'Uhrzeit' : 'Bis', it.time + (it.end ? ' – ' + it.end : '')]);
+      else if (it.date && it.type === 'termin') rows.push(['Uhrzeit', 'ganztägig']);
+      if (repLabel(it)) rows.push(['Wiederholung', it.repeat === 'weekly' ? 'wöchentlich · ' + repLabel(it) : repLabel(it)]);
+      if (it.repeat && it.repeat !== 'none' && it.pauseVacation) rows.push(['Im Urlaub', 'ausgesetzt']);
+      if (it.listId && listById(it.listId)) rows.push(['Liste', listById(it.listId).name]);
+    }
+    const tg = it.type === 'urlaub' ? tagSys('vacation') : tagById(it.tagId);
+    return '<span class="detail-title">' + esc(it.title || 'Urlaub') + '</span>' + (tg ? '<div>' + tagChip(tg) + '</div>' : '') +
       '<div class="card fields">' + rows.map((r) => '<div class="frow"><span>' + r[0] + '</span><b>' + esc(r[1]) + '</b></div>').join('') + '</div>' +
       '<div class="btn-col"><button type="button" class="btn primary" data-act="item-edit" data-id="' + it.id + '">' + icon('edit') + 'Bearbeiten</button>' +
       '<button type="button" class="btn danger" data-act="item-del" data-id="' + it.id + '">' + icon('trash') + 'Löschen</button></div>';
@@ -713,7 +755,7 @@
   }
   function personForm(f) {
     return field('Name', 'name', f.name, 'text', 'Vor- und Nachname', { big: true, autofocus: true, attrs: 'autocomplete="off"' }) +
-      clearable('Geburtsdatum', 'birthday', f.birthday, 'date', 'Erscheint jedes Jahr automatisch im Kalender.') +
+      clearable('Geburtsdatum', 'birthday', f.birthday, 'date') +
       field('Telefon', 'phone', f.phone, 'tel', 'z. B. 0176 …', { attrs: 'autocomplete="off"' }) +
       field('E-Mail', 'email', f.email, 'email', 'name@beispiel.de', { attrs: 'autocomplete="off"' }) +
       area('Adresse', 'address', f.address, 'Straße, PLZ Ort') +
@@ -723,8 +765,8 @@
     if (!isDate(f.start) || !isDate(f.endDate)) return '';
     if (f.endDate < f.start) return 'Das Ende liegt vor dem Start.';
     const n = planSessions({ start: f.start, end: f.endDate, days: f.days || [] }).length;
-    if (!(f.days || []).some(Boolean)) return 'Wähle deine Trainingstage.';
-    return n + ' Einheiten – jede erscheint im Kalender und unter „Heute“ zum Abhaken.';
+    if (!(f.days || []).some(Boolean)) return '';
+    return n + ' Einheiten';
   }
   function planForm(f) {
     return field('Name des Plans', 'name', f.name, 'text', 'z. B. Kraft & Ausdauer', { big: true, autofocus: true, attrs: 'autocomplete="off"' }) +
@@ -732,8 +774,7 @@
       '<div class="chips">' + [4, 6, 8, 12].map((w) => '<button type="button" class="chip" data-act="plan-dur" data-w="' + w + '">' + w + ' Wochen</button>').join('') + '</div>' +
       '<div class="field"><span class="label">Trainingstage</span><div class="days" data-group="days">' + WD.map((d, i) => '<button type="button" class="chip' + (f.days[i] ? ' on' : '') + '" data-act="f-day" data-i="' + i + '" aria-pressed="' + !!f.days[i] + '">' + d + '</button>').join('') + '</div></div>' +
       '<div class="two">' + clearable('Uhrzeit (optional)', 'time', f.time, 'time') + field('Dauer (optional)', 'dur', f.dur, 'number', 'Minuten', { attrs: 'inputmode="numeric" min="0"' }) + '</div>' +
-      '<small style="font-size:12px;color:var(--muted);margin-top:-8px">Ohne Uhrzeit steht das Training einfach am jeweiligen Tag an.</small>' +
-      area('Übungen & Notizen', 'notes', f.notes, 'z. B. Kniebeugen 3 × 10, Bankdrücken 3 × 8 …') +
+      area('Übungen & Notizen', 'notes', f.notes, 'Übungen …') +
       '<p class="data-note" id="plan-preview" style="margin:0">' + esc(planPreviewText(f)) + '</p>';
   }
   function tagForm(f) {
@@ -741,7 +782,6 @@
     return field('Name', 'name', f.name, 'text', 'z. B. Sport', { big: true, autofocus: true, attrs: 'autocomplete="off"' }) +
       '<div class="field"><span class="label">Farbe</span>' + swatches(f.color) + '</div>' +
       '<div class="preview">Vorschau: <span id="tag-preview">' + tagChip({ name: f.name || 'Tag', color: f.color }) + '</span></div>' +
-      (t && t.system ? '<p class="data-note" style="margin:0">Dieser Tag wird automatisch ' + (t.system === 'birthday' ? 'für Geburtstage' : 'für Trainingseinheiten') + ' verwendet. Name und Farbe kannst du ändern, löschen geht nicht.</p>' : '') +
       (t && !t.system ? '<button type="button" class="btn danger" data-act="tag-del" data-id="' + t.id + '">' + icon('trash') + 'Tag löschen</button>' : '');
   }
 
@@ -750,23 +790,37 @@
     syncForm();
     const f = ui.sheet.f;
     const title = (f.title || '').trim();
-    if (!title) return sheetErr('Bitte einen Titel eingeben.');
-    const noDate = f.type === 'aufgabe' && f.noDate;
-    if (!noDate && !isDate(f.date)) return sheetErr('Bitte ein Datum wählen.');
-    if (!noDate && f.type === 'termin' && f.time && f.end && f.end < f.time) return sheetErr('Das Ende liegt vor dem Beginn.');
-    const rec = {
-      id: f.id || uid(), type: f.type, title,
-      date: noDate ? '' : f.date, time: noDate ? '' : (f.time || ''),
-      end: (!noDate && f.type === 'termin' && f.time) ? (f.end || '') : '',
-      repeat: noDate ? 'none' : (f.repeat || 'none'), tagId: f.tagId || '', listId: f.listId || ''
-    };
+    let rec;
+    if (f.type === 'urlaub') {
+      if (!isDate(f.date) || !isDate(f.endDate)) return sheetErr('Bitte Von und Bis wählen.');
+      if (f.endDate < f.date) return sheetErr('„Bis“ liegt vor „Von“.');
+      rec = { id: f.id || uid(), type: 'urlaub', title: title || 'Urlaub', date: f.date, endDate: f.endDate, time: '', end: '', repeat: 'none', repeatDays: null, pauseVacation: false, tagId: '', listId: '' };
+    } else {
+      if (!title) return sheetErr('Bitte einen Titel eingeben.');
+      const noDate = f.type === 'aufgabe' && f.noDate;
+      if (!noDate && !isDate(f.date)) return sheetErr('Bitte ein Datum wählen.');
+      if (!noDate && f.type === 'termin' && f.time && f.end && f.end < f.time) return sheetErr('Das Ende liegt vor dem Beginn.');
+      const repeat = noDate ? 'none' : (f.repeat || 'none');
+      let days = null;
+      if (repeat === 'weekly') {
+        days = WD.map((_, i) => !!(f.repeatDays && f.repeatDays[i]));
+        if (!days.some(Boolean)) days[wdOf(parseD(f.date))] = true;
+      }
+      rec = {
+        id: f.id || uid(), type: f.type, title,
+        date: noDate ? '' : f.date, endDate: '', time: noDate ? '' : (f.time || ''),
+        end: (!noDate && f.type === 'termin' && f.time) ? (f.end || '') : '',
+        repeat, repeatDays: days, pauseVacation: repeat !== 'none' && !!f.pauseVacation,
+        tagId: f.tagId || '', listId: f.listId || ''
+      };
+    }
     if (f.id) { const i = data.items.findIndex((x) => x.id === f.id); if (i >= 0) data.items[i] = Object.assign({}, data.items[i], rec); }
     else data.items.push(rec);
     persist();
     closeSheet();
     ui.justAdded = rec.id;
     show('none');
-    toast(f.id ? 'Änderungen gespeichert' : (rec.type === 'termin' ? 'Termin angelegt' : 'Aufgabe angelegt'));
+    toast(f.id ? 'Änderungen gespeichert' : ({ termin: 'Termin angelegt', aufgabe: 'Aufgabe angelegt', urlaub: 'Urlaub eingetragen' })[rec.type]);
   }
   function saveList() {
     syncForm();
@@ -917,7 +971,7 @@
       const t = top();
       if (!t && ui.tab === 'training') return A['plan-new']();
       if (!t && ui.tab === 'personen') return A['person-new']();
-      const base = { type: 'termin', title: '', date: ymd(today()), time: '', end: '', repeat: 'none', tagId: '', listId: '', noDate: false };
+      const base = { type: 'termin', title: '', date: ymd(today()), endDate: '', time: '', end: '', repeat: 'none', repeatDays: null, pauseVacation: false, tagId: '', listId: '', noDate: false };
       if (!t && ui.tab === 'kalender') base.date = ui.selDay || ymd(today());
       if (!t && ui.tab === 'listen') { base.type = 'aufgabe'; }
       if (t && t.kind === 'list') { base.type = 'aufgabe'; if (t.id === '__irgendwann') base.noDate = true; else base.listId = t.id; }
@@ -926,7 +980,7 @@
     'item-open': (el) => openSheet('entryView', { id: el.dataset.id }),
     'item-edit': (el) => {
       const it = itemById(el.dataset.id); if (!it) return;
-      openSheet('entry', { id: it.id, type: it.type, title: it.title, date: it.date || ymd(today()), time: it.time, end: it.end, repeat: it.repeat || 'none', tagId: it.tagId, listId: it.listId, noDate: !it.date }, true);
+      openSheet('entry', { id: it.id, type: it.type, title: it.title, date: it.date || ymd(today()), endDate: it.endDate || it.date || ymd(today()), time: it.time, end: it.end, repeat: it.repeat || 'none', repeatDays: it.repeatDays ? it.repeatDays.slice() : null, pauseVacation: !!it.pauseVacation, pauseTouched: true, tagId: it.tagId, listId: it.listId, noDate: !it.date }, true);
     },
     'item-del': (el) => {
       const id = el.dataset.id;
@@ -1005,8 +1059,9 @@
       syncForm();
       const f = ui.sheet.f;
       if (f.type === el.dataset.v) return;
-      ui.segFrom.type = f.type === 'termin' ? 0 : 1;
+      ui.segFrom.type = ['termin', 'aufgabe', 'urlaub'].indexOf(f.type);
       f.type = el.dataset.v;
+      if (f.type === 'urlaub' && (!isDate(f.endDate) || f.endDate < f.date)) f.endDate = f.date;
       renderSheetBody();
     },
     'f-set': (el) => {
@@ -1016,18 +1071,26 @@
       const grp = el.closest('[data-group]');
       if (grp) $$('[data-act="f-set"]', grp).forEach((b) => { const on = b === el; b.classList.toggle('on', on); b.setAttribute('aria-pressed', on); });
       if (ui.sheet.kind === 'tag') updateTagPreview();
+      if (k === 'tagId' && ui.sheet.kind === 'entry' && !ui.sheet.f.pauseTouched) {
+        const tg = tagById(el.dataset.v);
+        ui.sheet.f.pauseVacation = !!(tg && /arbeit/i.test(tg.name));
+        const sw = $('[data-f="pauseVacation"]', sheetRoot); if (sw) sw.setAttribute('aria-checked', ui.sheet.f.pauseVacation);
+      }
     },
     'f-toggle': (el) => {
       syncForm();
       const k = el.dataset.f;
       ui.sheet.f[k] = !ui.sheet.f[k];
       el.setAttribute('aria-checked', !!ui.sheet.f[k]);
+      if (k === 'pauseVacation') { ui.sheet.f.pauseTouched = true; return; }
       setTimeout(renderSheetBody, 200);
     },
     'f-day': (el) => {
       syncForm();
       const i = Number(el.dataset.i);
-      const days = ui.sheet.f.days;
+      const key = el.dataset.f || 'days';
+      if (!Array.isArray(ui.sheet.f[key])) ui.sheet.f[key] = WD.map(() => false);
+      const days = ui.sheet.f[key];
       days[i] = !days[i];
       el.classList.toggle('on', days[i]); el.setAttribute('aria-pressed', days[i]);
       const pv = $('#plan-preview'); if (pv) pv.textContent = planPreviewText(ui.sheet.f);
@@ -1073,6 +1136,17 @@
       }, 400);
     }
     if (ui.sheet && el.dataset && el.dataset.f === 'name' && ui.sheet.kind === 'tag') { ui.sheet.f.name = el.value; updateTagPreview(); }
+  });
+  document.addEventListener('change', (e) => {
+    const el = e.target;
+    if (!ui.sheet || ui.sheet.kind !== 'entry' || !el.dataset || el.dataset.f !== 'repeat') return;
+    syncForm();
+    const f = ui.sheet.f;
+    if (f.repeat === 'weekly' && !(f.repeatDays || []).some(Boolean) && isDate(f.date)) {
+      f.repeatDays = WD.map(() => false); f.repeatDays[wdOf(parseD(f.date))] = true;
+    }
+    if (f.repeat !== 'none' && !f.pauseTouched) { const tg = tagById(f.tagId); f.pauseVacation = !!(tg && /arbeit/i.test(tg.name)); }
+    renderSheetBody();
   });
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && ui.sheet) closeSheet();

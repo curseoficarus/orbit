@@ -2,9 +2,9 @@
   "appId": "io.github.curseoficarus.orbit",
   "appName": "Orbit",
   "webDir": "www",
-  "backgroundColor": "#000E3F",
+  "backgroundColor": "#000000",
   "android": {
-    "backgroundColor": "#000E3F"
+    "backgroundColor": "#000000"
   },
   "plugins": {
     "SystemBars": {
