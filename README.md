@@ -22,13 +22,16 @@ Zusätzlich gibt es in der App unter **Einstellungen → Backup speichern** eine
 - **Heute / Woche / Monat:** Termine, Aufgaben, Trainings und Geburtstage auf einen Blick, zum Abhaken
 - **Kalender:** Monatsansicht mit farbigen Punkten; zum Monatswechsel wischen
 - **Listen:** eigene Listen, Aufgaben mit oder ohne Datum, Sammelliste „Irgendwann“
-- **Training:** Pläne mit Zeitraum, Trainingstagen, optionaler Uhrzeit und Übungs-Notizen
-- **Personen:** Geburtstag (steht jedes Jahr im Kalender), Telefon, E-Mail, Adresse, Notiz
+- **Training:** Pläne mit Zeitraum, Trainingstagen, optionaler Uhrzeit, Übungen (Sätze × Wiederholungen, bis Muskelversagen oder Dauer); Einheiten abhaken oder mit Grund auslassen
+- **Personen:** Geburtstag (auch ohne Jahr; steht jedes Jahr im Kalender), Telefon, E-Mail, Adresse, Notiz
+- **Notizen:** mit Überschrift, Text auch per Diktat
+- **Sprachsteuerung (Mikrofon-Knopf):** Termine, Aufgaben, Urlaub, Listen, Personen und Notizen per Sprache anlegen – läuft auf dem Gerät, ohne KI-Dienst
+- **Benachrichtigungen (Glocke auf „Heute“):** für Geburtstage, Termine, Aufgaben und Training einzeln wählbar
 - **Einstellungen (Zahnrad):** Hell/Dunkel/Automatisch, Tags verwalten inkl. Farbe, Backup
 
 ## Aufbau
 
-- `www/` – die App selbst (HTML, CSS, JavaScript, Schriften, Logo)
+- `www/` – die App selbst (HTML, CSS, JavaScript, Schriften, Logo); `www/voice.js` ist der Sprachversteher
 - `android-res/` – App-Symbol und Startbildschirm im Orbit-Logo
 - `android-signing/` – Signaturschlüssel für die APK
 - `capacitor.config.json`, `package.json` – Android-Verpackung mit Capacitor

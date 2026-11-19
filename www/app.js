@@ -6,7 +6,7 @@
  */
 'use strict';
 (function () {
-  const APP_VERSION = '1.2.0';
+  const APP_VERSION = '1.3.0';
   const STORE_KEY = 'orbit-data';
   const SAFETY_KEY = 'orbit-data-sicherung';
   const DATA_VERSION = 1;
@@ -44,6 +44,13 @@
     return WD.filter((_, i) => on[i]).join(', ');
   };
   const repLabel = (it) => (it.repeat === 'weekly' && (it.repeatDays || []).some(Boolean) ? fmtDays(it.repeatDays) : REP[it.repeat] || '');
+  // Geburtstag: "1992-11-08" oder ohne Jahr "--11-08"
+  const bdInfo = (s) => {
+    if (isDate(s)) { const p = s.split('-').map(Number); return { y: p[0], m: p[1], d: p[2] }; }
+    const m = /^--(\d{2})-(\d{2})$/.exec(s || '');
+    return m ? { y: null, m: +m[1], d: +m[2] } : null;
+  };
+  const fmtBd = (b) => b.d + '. ' + MON[b.m - 1] + (b.y ? ' ' + b.y : '');
   const fmtLong = (d) => d.getDate() + '. ' + MON[d.getMonth()] + ' ' + d.getFullYear();
 
   const PALETTE = [
@@ -87,7 +94,11 @@
     trash: 'M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3',
     edit: 'M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z',
     tag: 'M3 12V4a1 1 0 0 1 1-1h8l9 9-9 9-9-9ZM7.5 7.5h.01',
-    moon: 'M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z'
+    moon: 'M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z',
+    bell: 'M6 16V11a6 6 0 1 1 12 0v5l1.5 2h-15L6 16ZM10 21h4',
+    mic: 'M12 15a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3ZM19 11a7 7 0 0 1-14 0M12 18v3M9 21h6',
+    x: 'M7 7l10 10M17 7L7 17',
+    note: 'M6 3h9l5 5v13H6zM15 3v5h5M9 13h7M9 17h5'
   };
   const icon = (name, cls) => '<svg viewBox="0 0 24 24" aria-hidden="true"' + (cls ? ' class="' + cls + '"' : '') + '><path d="' + P[name] + '"/></svg>';
   const CHECK_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path class="tick" d="' + P.tick + '"/></svg>';
@@ -104,20 +115,29 @@
       { id: 't-urlaub', name: 'Urlaub', color: 'gelb', system: 'vacation' }
     ];
   }
+  function defaultNotify() {
+    return { birthday: { on: false, time: '09:00' }, termin: { on: false, lead: '15', time: '08:00' }, aufgabe: { on: false, time: '09:00' }, training: { on: false, time: '08:00' } };
+  }
   function defaultData() {
-    return { version: DATA_VERSION, items: [], people: [], plans: [], lists: [], done: {}, tags: defaultTags(), settings: { theme: 'system' } };
+    return { version: DATA_VERSION, items: [], people: [], plans: [], lists: [], notes: [], done: {}, skipped: {}, imports: {}, tags: defaultTags(), settings: { theme: 'system', notify: defaultNotify() } };
   }
   function migrate(d) {
     const out = defaultData();
     if (!d || typeof d !== 'object') return out;
-    ['items', 'people', 'plans', 'lists', 'tags'].forEach((k) => { if (Array.isArray(d[k])) out[k] = d[k]; });
+    ['items', 'people', 'plans', 'lists', 'tags', 'notes'].forEach((k) => { if (Array.isArray(d[k])) out[k] = d[k]; });
     if (d.done && typeof d.done === 'object') out.done = d.done;
+    if (d.skipped && typeof d.skipped === 'object') out.skipped = d.skipped;
+    if (d.imports && typeof d.imports === 'object') out.imports = d.imports;
     out.settings = Object.assign({ theme: 'system' }, d.settings || {});
+    const dn = defaultNotify(), sn = (d.settings && d.settings.notify) || {};
+    out.settings.notify = {};
+    Object.keys(dn).forEach((k) => { out.settings.notify[k] = Object.assign({}, dn[k], sn[k] || {}); });
+    out.notes = out.notes.filter((x) => x && x.id).map((n) => Object.assign({ title: '', body: '', created: Date.now(), updated: Date.now() }, n));
     if (!out.tags.some((t) => t.system === 'birthday')) out.tags.push(defaultTags()[3]);
     if (!out.tags.some((t) => t.system === 'training')) out.tags.push(defaultTags()[5]);
     if (!out.tags.some((t) => t.system === 'vacation')) out.tags.push(defaultTags()[6]);
     out.items = out.items.filter((x) => x && x.id).map((x) => Object.assign({ type: 'aufgabe', title: '', date: '', endDate: '', time: '', end: '', repeat: 'none', repeatDays: null, pauseVacation: false, tagId: '', listId: '' }, x));
-    out.plans = out.plans.filter((x) => x && x.id).map((p) => Object.assign({ name: '', start: '', end: '', time: '', dur: '', notes: '' }, p, { days: Array.isArray(p.days) ? WD.map((_, i) => !!p.days[i]) : WD.map(() => false) }));
+    out.plans = out.plans.filter((x) => x && x.id).map((p) => Object.assign({ name: '', start: '', end: '', time: '', dur: '', notes: '', exercises: [] }, p, { days: Array.isArray(p.days) ? WD.map((_, i) => !!p.days[i]) : WD.map(() => false) }));
     out.people = out.people.filter((x) => x && x.id).map((p) => Object.assign({ name: '', birthday: '', phone: '', email: '', address: '', note: '' }, p));
     out.lists = out.lists.filter((x) => x && x.id).map((l) => Object.assign({ name: '', color: 'grau' }, l));
     out.version = DATA_VERSION;
@@ -138,9 +158,34 @@
     }
   }
   let data = load();
+  // Geburtstage aus der Liste "Birthys" (Jahr nur, wenn es bekannt ist)
+  const BIRTHYS = [
+    ['Markus Giesser', '12-01', 1983], ['Leon Schierer', '03-05', 2003], ['Tomislav Jerkovic', '02-14'], ['Nikola Mihanovic', '02-17'],
+    ['Gabor Merhelik', '02-25'], ['Christoph Hauer', '02-28'], ['Michaela Heidinger', '03-06'], ['Bettina Kloimstein', '03-29'],
+    ['Gregor Tschon', '04-01'], ['Jürgen Kloimstein', '04-03'], ['Dennis Omoruyi', '04-16'], ['Gerhard Mader', '04-19'],
+    ['David Pisching', '05-15'], ['Fabian Klaunser', '05-20'], ['Traudl Kloimstein', '06-20'], ['Johannes Jirka', '06-24'],
+    ['Patrizia Hauer', '06-30'], ['Nils Heidegger', '07-13'], ['Anton Petter', '07-27'], ['Leo Entstrasser', '08-07'],
+    ['Alexander Seitner', '08-08'], ['Simon Rainer', '08-09'], ['Anna Kloimstein', '08-14'], ['Dominik Presslaber', '08-29'],
+    ['Simon Motschiunigg', '09-06'], ['Mathias Spielmann', '09-14'], ['Simone Seitner', '09-14'], ['Eva Kloimstein', '09-20'],
+    ['Michael Lidl', '12-01'], ['Okan Cacir', '12-09'], ['Herbert Heidinger', '12-11'], ['David Schindelwig', '12-16'],
+    ['Erna Heidinger', '12-18'], ['Clemens Petter', '12-30'], ['Daniel Spielmann', '01-15'], ['Daniel Singer', '02-07'],
+    ['Robert Pachler', '05-29'], ['Erwin Stefanski', '12-18'], ['Ali Dag', '01-01'], ['Tobias Petter', '01-11'],
+    ['Sigrid Petter', '01-14'], ['Alexander Kogler', '09-05']
+  ];
+  (function importBirthys() {
+    if (data.imports.birthys1) return;
+    const have = new Set(data.people.map((p) => p.name.trim().toLowerCase()));
+    BIRTHYS.forEach((b) => {
+      if (have.has(b[0].toLowerCase())) return;
+      have.add(b[0].toLowerCase());
+      data.people.push({ id: 'bd-' + Math.random().toString(36).slice(2, 10), name: b[0], birthday: b[2] ? b[2] + '-' + b[1] : '--' + b[1], phone: '', email: '', address: '', note: '' });
+    });
+    data.imports.birthys1 = true;
+  })();
   function persist() {
     try { localStorage.setItem(STORE_KEY, JSON.stringify(data)); }
     catch (e) { toast('Speichern fehlgeschlagen – Speicher voll?'); }
+    scheduleNotifications();
   }
   const snapshot = () => JSON.stringify(data);
 
@@ -157,6 +202,7 @@
     { id: 'kalender', label: 'Kalender', icon: 'cal' },
     { id: 'listen', label: 'Listen', icon: 'list' },
     { id: 'training', label: 'Training', icon: 'dumbbell' },
+    { id: 'notizen', label: 'Notizen', icon: 'note' },
     { id: 'personen', label: 'Personen', icon: 'people' }
   ];
   const ui = { tab: 'heute', stack: [], range: 'tag', monthOff: 0, selDay: '', justAdded: null, popKey: null, segFrom: {}, contentAnim: '', gridAnim: '', bumpDay: false, fresh: true, sheet: null, resetArmed: false };
@@ -191,9 +237,9 @@
       out.push({ kind: it.type, it, key: it.id + '|' + s, time: it.time || '', d });
     });
     data.people.forEach((p) => {
-      if (!isDate(p.birthday)) return;
-      const b = parseD(p.birthday);
-      if (b.getMonth() === d.getMonth() && b.getDate() === d.getDate() && d >= b) out.push({ kind: 'geburtstag', p, key: 'bd' + p.id + '|' + s, time: '', age: d.getFullYear() - b.getFullYear(), d });
+      const b = bdInfo(p.birthday);
+      if (!b) return;
+      if (b.m - 1 === d.getMonth() && b.d === d.getDate() && (!b.y || d.getFullYear() >= b.y)) out.push({ kind: 'geburtstag', p, key: 'bd' + p.id + '|' + s, time: '', age: b.y ? d.getFullYear() - b.y : null, d });
     });
     data.plans.forEach((pl) => { if (s >= pl.start && s <= pl.end && pl.days[wdOf(d)]) out.push({ kind: 'training', pl, key: 'pl' + pl.id + '|' + s, time: pl.time || '', d }); });
     const rank = (r) => (r.kind === 'urlaub' ? 0 : r.kind === 'geburtstag' ? 1 : 2);
@@ -213,6 +259,11 @@
     return out;
   }
 
+  const SKIP = { krank: 'Krank', zeit: 'Keine Zeit', faul: 'Faulheit' };
+  function skipBtn(key, label) {
+    const sk = data.skipped[key];
+    return '<button type="button" class="skip' + (sk ? ' on' : '') + '" data-act="skip" data-key="' + esc(key) + '" aria-haspopup="menu" aria-label="Nicht gemacht: ' + esc(label) + '">' + icon('x') + '</button>';
+  }
   function tagChip(tag, dim) {
     if (!tag) return '';
     return '<span class="tag' + (dim ? ' dim' : '') + '" style="' + colorVars(tag.color) + '">' + esc(tag.name) + '</span>';
@@ -242,11 +293,12 @@
       tag = tagSys('vacation');
     } else if (r.kind === 'geburtstag') {
       left = 'ganzt.'; title = r.p.name + ' hat Geburtstag'; act = 'person-open'; id = r.p.id;
-      meta.push('wird ' + r.age);
+      if (r.age != null) meta.push('wird ' + r.age);
       tag = tagSys('birthday');
     } else if (r.kind === 'training') {
       box = true; title = 'Training: ' + r.pl.name; act = 'plan-open'; id = r.pl.id;
-      meta.push(r.pl.time ? r.pl.time : 'irgendwann am Tag');
+      if (data.skipped[r.key]) meta.push('ausgelassen · ' + SKIP[data.skipped[r.key]]);
+      else meta.push(r.pl.time ? r.pl.time : 'irgendwann am Tag');
       if (r.pl.dur) meta.push(r.pl.dur + ' min');
       tag = tagSys('training');
     }
@@ -254,18 +306,21 @@
     const pop = ui.popKey === r.key ? ' pop' : '';
     return '<div class="' + cls + '">' +
       (box
-        ? '<button type="button" class="check' + (done ? ' on' : '') + pop + '" data-act="toggle" data-key="' + esc(r.key) + '" aria-pressed="' + done + '" aria-label="' + (done ? 'Als offen markieren: ' : 'Erledigt: ') + esc(title) + '">' + CHECK_SVG + '</button>'
+        ? '<button type="button" class="check' + (done ? ' on' : '') + pop + '" data-act="toggle" data-key="' + esc(r.key) + '" aria-pressed="' + done + '" aria-label="' + (done ? 'Als offen markieren: ' : 'Erledigt: ') + esc(title) + '">' + CHECK_SVG + '</button>' +
+          (r.kind === 'training' ? skipBtn(r.key, title) : '')
         : '<span class="row-time">' + esc(left) + '</span>') +
-      '<button type="button" class="row-main" data-act="' + act + '" data-id="' + esc(id) + '"><span class="row-title' + (done ? ' done' : '') + '">' + esc(title) + '</span>' +
+      '<button type="button" class="row-main" data-act="' + act + '" data-id="' + esc(id) + '"><span class="row-title' + (done ? ' done' : '') + (data.skipped[r.key] ? ' skipped' : '') + '">' + esc(title) + '</span>' +
       (meta.length ? '<span class="row-meta">' + esc(meta.join(' · ')) + '</span>' : '') + '</button>' +
       tagChip(tag, done) +
       '</div>';
   }
 
   // ---------- Bausteine ----------
-  function topBar() {
-    return '<div class="topbar"><div class="brand"><img src="icons/logo-mark.png" alt="" width="30" height="30"><span>Orbit</span></div>' +
-      '<button type="button" class="icon-btn" data-act="settings" aria-label="Einstellungen">' + icon('gear') + '</button></div>';
+  function topBar(bell) {
+    const n = data.settings.notify, anyOn = Object.keys(n).some((k) => n[k].on);
+    return '<div class="topbar"><div class="brand"><img src="icons/logo-mark.png" alt="" width="30" height="30"><span>Orbit</span></div><div class="top-actions">' +
+      (bell ? '<button type="button" class="icon-btn bell' + (anyOn ? ' on' : '') + '" data-act="notify" aria-label="Benachrichtigungen">' + icon('bell') + '</button>' : '') +
+      '<button type="button" class="icon-btn" data-act="settings" aria-label="Einstellungen">' + icon('gear') + '</button></div></div>';
   }
   function navBar(backLabel, actions) {
     return '<div class="navbar"><button type="button" class="back" data-act="back">' + icon('chevL') + esc(backLabel) + '</button><div class="nav-actions">' + (actions || '') + '</div></div>';
@@ -312,7 +367,7 @@
     }
     const title = ui.range === 'tag' ? 'Heute' : (ui.range === 'woche' ? 'Diese Woche' : 'Dieser Monat');
     const anim = ui.contentAnim; ui.contentAnim = '';
-    return topBar() +
+    return topBar(true) +
       '<div class="title-block"><span class="eyebrow">' + esc(fmtDay(t0).toUpperCase()) + '</span><h1 class="big">' + title + '</h1></div>' +
       seg('range', [['tag', 'Heute'], ['woche', 'Woche'], ['monat', 'Monat']], ui.range, 'range') +
       '<div class="stack ' + anim + '">' + html + '</div>';
@@ -401,8 +456,10 @@
   function planStats(pl) {
     const ss = planSessions(pl);
     const dn = ss.filter((s) => data.done['pl' + pl.id + '|' + s]).length;
-    return { ss, dn, pct: ss.length ? Math.round(dn / ss.length * 100) : 0 };
+    const sk = ss.filter((s) => data.skipped['pl' + pl.id + '|' + s]).length;
+    return { ss, dn, sk, pct: ss.length ? Math.round(dn / ss.length * 100) : 0 };
   }
+  const exLabel = (e) => (e.mode === 'dauer' ? (e.dur ? e.dur + ' min' : 'Dauer') : (e.sets || '?') + ' × ' + (e.failure ? 'bis Muskelversagen' : (e.reps || '?') + ' Wdh.'));
   const daysLabel = (pl) => WD.filter((_, i) => pl.days[i]).join(', ');
 
   function scrTraining() {
@@ -413,9 +470,9 @@
       const active = ts >= pl.start && ts <= pl.end, future = ts < pl.start;
       return '<button type="button" class="plan-card' + (ui.justAdded === pl.id ? ' enter' : '') + '" data-act="plan-open" data-id="' + pl.id + '">' +
         '<span class="head"><span style="display:flex;flex-direction:column;gap:2px"><h3>' + esc(pl.name) + '</h3><span class="sub">' + esc(fmtShort(parseD(pl.start)) + ' – ' + fmtShort(parseD(pl.end)) + ' · ' + daysLabel(pl)) + '</span></span>' +
-        '<span class="state' + (active ? ' active' : '') + '">' + (active ? 'aktiv' : (future ? 'geplant' : 'beendet')) + '</span></span>' +
+        '<span class="state' + (active ? ' active' : '') + '">' + (active ? 'aktiv' : (future ? 'geplant' : 'inaktiv')) + '</span></span>' +
         '<span class="bar plain' + grow + '" style="--w:' + st.pct + '%"><span></span></span>' +
-        '<span class="sub">' + st.dn + ' von ' + st.ss.length + ' Einheiten erledigt</span></button>';
+        '<span class="sub">' + st.dn + ' von ' + st.ss.length + ' erledigt' + (st.sk ? ' · ' + st.sk + ' ausgelassen' : '') + ((pl.exercises || []).length ? ' · ' + pl.exercises.length + ' Übungen' : '') + '</span></button>';
     }).join('');
     return topBar() +
       '<div class="title-row"><h1 class="big">Training</h1><button type="button" class="pill" data-act="plan-new">' + icon('plus') + 'Neuer Plan</button></div>' +
@@ -431,38 +488,42 @@
     const rows = st.ss.map((s) => {
       const key = 'pl' + pl.id + '|' + s, done = !!data.done[key];
       const isT = s === ts, past = s < ts;
-      const badge = isT ? '<span class="mini today">Heute</span>' : (done ? '<span class="mini ok">erledigt</span>' : (past ? '<span class="mini miss">verpasst</span>' : ''));
+      const sk = data.skipped[key];
+      const badge = sk ? '<span class="mini miss">' + SKIP[sk] + '</span>' : isT ? '<span class="mini today">Heute</span>' : (done ? '<span class="mini ok">erledigt</span>' : (past ? '<span class="mini miss">verpasst</span>' : ''));
       return '<div class="row"' + (isT ? ' id="sess-today"' : '') + '><button type="button" class="check' + (done ? ' on' : '') + (ui.popKey === key ? ' pop' : '') + '" data-act="toggle" data-key="' + key + '" aria-pressed="' + done + '" aria-label="Einheit ' + esc(fmtShort(parseD(s))) + ' erledigt">' + CHECK_SVG + '</button>' +
-        '<span class="sess-label' + (done ? ' done' : '') + '">' + esc(fmtShort(parseD(s)) + (pl.time ? ' · ' + pl.time : '')) + '</span>' + badge + '</div>';
+        skipBtn(key, 'Einheit ' + fmtShort(parseD(s))) +
+        '<span class="sess-label' + (done ? ' done' : '') + (sk ? ' skipped' : '') + '">' + esc(fmtShort(parseD(s)) + (pl.time ? ' · ' + pl.time : '')) + '</span>' + badge + '</div>';
     }).join('');
     const info = [fmtLong(parseD(pl.start)) + ' – ' + fmtLong(parseD(pl.end)), daysLabel(pl), pl.time ? pl.time + ' Uhr' : 'ohne feste Uhrzeit', pl.dur ? pl.dur + ' min' : ''].filter(Boolean).join(' · ');
     return navBar('Training', '<button type="button" class="pill" data-act="plan-edit" data-id="' + id + '">' + icon('edit') + 'Plan bearbeiten</button><button type="button" class="pill danger" data-act="plan-del" data-id="' + id + '">Plan löschen</button>') +
       '<div class="hero"><h2>' + esc(pl.name) + '</h2><span class="muted">' + esc(info) + '</span>' +
-      '<span class="bar' + grow + '" style="--w:' + st.pct + '%"><span></span></span><span class="muted">' + st.dn + ' von ' + st.ss.length + ' Einheiten erledigt · ' + st.pct + ' %</span></div>' +
+      '<span class="bar' + grow + '" style="--w:' + st.pct + '%"><span></span></span><span class="muted">' + st.dn + ' von ' + st.ss.length + ' erledigt' + (st.sk ? ' · ' + st.sk + ' ausgelassen' : '') + ' · ' + st.pct + ' %</span></div>' +
+      ((pl.exercises || []).length ? '<section class="group"><h2 class="group-label">Übungen</h2><div class="card fields">' + pl.exercises.map((e) => '<div class="ex-row"><b>' + esc(e.name) + '</b><span>' + esc(exLabel(e)) + '</span></div>').join('') + '</div></section>' : '') +
       '<section class="group"><h2 class="group-label">Alle Einheiten</h2><div class="card list">' + (rows || '<div class="hint">Keine Einheiten im Zeitraum.</div>') + '</div></section>' +
-      '<section class="group"><h2 class="group-label"><label for="plan-notes">Übungen &amp; Notizen</label></h2>' +
-      '<textarea id="plan-notes" class="input notes" data-autosave="plan-notes" data-id="' + id + '" placeholder="Übungen …">' + esc(pl.notes) + '</textarea>' +
+      '<section class="group"><h2 class="group-label"><label for="plan-notes">Notizen</label></h2>' +
+      '<textarea id="plan-notes" class="input notes" data-autosave="plan-notes" data-id="' + id + '" placeholder="Notizen …">' + esc(pl.notes) + '</textarea>' +
       '<span class="saved-note" id="notes-saved">Gespeichert</span></section>';
   }
 
   function nextBirthday(b) {
     const t0 = today();
-    let nb = new Date(t0.getFullYear(), b.getMonth(), b.getDate());
-    if (nb < t0) nb = new Date(t0.getFullYear() + 1, b.getMonth(), b.getDate());
+    let nb = new Date(t0.getFullYear(), b.m - 1, b.d);
+    if (nb < t0) nb = new Date(t0.getFullYear() + 1, b.m - 1, b.d);
     return nb;
   }
   function scrPersonen() {
     const t0 = today();
     const people = data.people.slice().sort((a, b) => a.name.localeCompare(b.name, 'de'));
-    const upcoming = people.filter((p) => isDate(p.birthday)).map((p) => {
-      const b = parseD(p.birthday), nb = nextBirthday(b);
-      return { p, nb, diff: Math.round((nb - t0) / 86400000), age: nb.getFullYear() - b.getFullYear() };
-    }).sort((a, b) => a.diff - b.diff).slice(0, 5);
+    const upcoming = people.filter((p) => bdInfo(p.birthday)).map((p) => {
+      const b = bdInfo(p.birthday), nb = nextBirthday(b);
+      return { p, nb, diff: Math.round((nb - t0) / 86400000), age: b.y ? nb.getFullYear() - b.y : null };
+    }).sort((a, b) => a.diff - b.diff).slice(0, 8);
     const bdays = upcoming.length ? '<section class="group"><h2 class="group-label">Nächste Geburtstage</h2><div class="bday-row">' + upcoming.map((u) =>
-      '<button type="button" class="bday' + (u.diff === 0 ? ' now' : '') + '" data-act="person-open" data-id="' + u.p.id + '">' + avatar(u.p, 44) + '<b>' + esc(u.p.name.split(' ')[0]) + '</b><small>' + (u.diff === 0 ? 'heute' : (u.diff === 1 ? 'morgen' : u.nb.getDate() + '. ' + MONS[u.nb.getMonth()])) + ' · wird ' + u.age + '</small></button>').join('') + '</div></section>' : '';
+      '<button type="button" class="bday' + (u.diff === 0 ? ' now' : '') + '" data-act="person-open" data-id="' + u.p.id + '">' + avatar(u.p, 44) + '<b>' + esc(u.p.name.split(' ')[0]) + '</b><small>' + (u.diff === 0 ? 'heute' : (u.diff === 1 ? 'morgen' : u.nb.getDate() + '. ' + MONS[u.nb.getMonth()])) + (u.age != null ? ' · wird ' + u.age : '') + '</small></button>').join('') + '</div></section>' : '';
     const rows = people.map((p) => {
       let sub = p.phone || p.email || '';
-      if (isDate(p.birthday)) { const b = parseD(p.birthday); sub = 'Geburtstag ' + b.getDate() + '. ' + MON[b.getMonth()] + (sub ? ' · ' + sub : ''); }
+      const bi = bdInfo(p.birthday);
+      if (bi) sub = 'Geburtstag ' + bi.d + '. ' + MON[bi.m - 1] + (sub ? ' · ' + sub : '');
       return '<button type="button" class="link-row' + (ui.justAdded === p.id ? ' enter' : '') + '" data-act="person-open" data-id="' + p.id + '">' + avatar(p, 40) + '<span class="grow"><span class="name">' + esc(p.name) + '</span>' + (sub ? '<span class="meta">' + esc(sub) + '</span>' : '') + '</span>' + icon('chevR', 'chev') + '</button>';
     }).join('');
     return topBar() +
@@ -482,10 +543,11 @@
     }
     if (p.email) qa.push('<a class="qa" href="mailto:' + esc(p.email) + '">' + icon('mail') + 'E-Mail</a>');
     let bd = '';
-    if (isDate(p.birthday)) {
-      const b = parseD(p.birthday), nb = nextBirthday(b);
-      const diff = Math.round((nb - today()) / 86400000), age = nb.getFullYear() - b.getFullYear();
-      bd = '<div class="bday-card">' + icon('gift') + '<span style="display:flex;flex-direction:column;gap:2px"><b>' + (diff === 0 ? 'Geburtstag heute · wird ' + age : 'Geburtstag in ' + diff + (diff === 1 ? ' Tag' : ' Tagen') + ' · wird ' + age) + '</b><small>' + esc(fmtLong(b)) + '</small></span></div>';
+    const b = bdInfo(p.birthday);
+    if (b) {
+      const nb = nextBirthday(b);
+      const diff = Math.round((nb - today()) / 86400000), ageTxt = b.y ? ' · wird ' + (nb.getFullYear() - b.y) : '';
+      bd = '<div class="bday-card">' + icon('gift') + '<span style="display:flex;flex-direction:column;gap:2px"><b>' + (diff === 0 ? 'Geburtstag heute' : 'Geburtstag in ' + diff + (diff === 1 ? ' Tag' : ' Tagen')) + ageTxt + '</b><small>' + esc(fmtBd(b)) + '</small></span></div>';
     }
     const f = [['Telefon', p.phone], ['E-Mail', p.email], ['Adresse', p.address], ['Notiz', p.note]].filter((x) => x[1]);
     return navBar('Personen', '<button type="button" class="pill" data-act="person-edit" data-id="' + id + '">' + icon('edit') + 'Bearbeiten</button><button type="button" class="pill danger" data-act="person-del" data-id="' + id + '">Löschen</button>') +
@@ -495,6 +557,38 @@
         : '');
   }
 
+  const noteById = (id) => data.notes.find((n) => n.id === id);
+  function fmtStamp(ms) {
+    const d = new Date(ms), t0 = today(), d0 = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    const diff = Math.round((t0 - d0) / 86400000);
+    if (diff === 0) return 'Heute, ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+    if (diff === 1) return 'Gestern';
+    return d.getDate() + '. ' + MONS[d.getMonth()] + (d.getFullYear() !== t0.getFullYear() ? ' ' + d.getFullYear() : '');
+  }
+  function scrNotizen() {
+    const notes = data.notes.slice().sort((a, b) => b.updated - a.updated);
+    const cards = notes.map((n) => {
+      const body = (n.body || '').trim();
+      return '<button type="button" class="note-card' + (ui.justAdded === n.id ? ' enter' : '') + '" data-act="note-open" data-id="' + n.id + '">' +
+        '<b>' + esc(n.title || 'Ohne Überschrift') + '</b>' + (body ? '<span class="note-prev">' + esc(body.slice(0, 160)) + '</span>' : '') +
+        '<small>' + esc(fmtStamp(n.updated)) + '</small></button>';
+    }).join('');
+    return topBar() +
+      '<div class="title-row"><h1 class="big">Notizen</h1><button type="button" class="pill" data-act="note-new">' + icon('plus') + 'Notiz</button></div>' +
+      (cards ? '<div class="notes-list">' + cards + '</div>' : emptyState('note', 'Noch keine Notizen', '', 'Notiz anlegen', 'note-new'));
+  }
+  function scrNoteDetail(id) {
+    const n = noteById(id);
+    if (!n) return scrNotizen();
+    const listening = ui.dictating === id;
+    return navBar('Notizen', '<button type="button" class="pill' + (listening ? ' rec' : '') + '" data-act="note-dictate" data-id="' + id + '">' + icon('mic') + (listening ? 'Hört zu …' : 'Diktieren') + '</button>' +
+      '<button type="button" class="pill danger" data-act="note-del" data-id="' + id + '">Löschen</button>') +
+      '<label class="vh" for="note-title">Überschrift</label>' +
+      '<input id="note-title" class="note-title" data-autosave="note-title" data-id="' + id + '" value="' + esc(n.title) + '" placeholder="Überschrift" autocomplete="off" enterkeyhint="next">' +
+      '<label class="vh" for="note-body">Text</label>' +
+      '<textarea id="note-body" class="note-body" data-autosave="note-body" data-id="' + id + '" placeholder="Text …">' + esc(n.body) + '</textarea>' +
+      '<small class="saved-note" id="notes-saved">Gespeichert</small>';
+  }
   function scrSettings() {
     const theme = data.settings.theme || 'system';
     const tags = data.tags.map((t) => '<button type="button" class="setting-row" data-act="tag-edit" data-id="' + t.id + '"><span class="big-dot" style="--tc:' + colorHex(t.color) + '"></span><span class="grow">' + tagChip(t) +
@@ -518,12 +612,14 @@
       if (t.kind === 'list') return scrListDetail(t.id);
       if (t.kind === 'plan') return scrPlanDetail(t.id);
       if (t.kind === 'person') return scrPersonDetail(t.id);
+      if (t.kind === 'note') return scrNoteDetail(t.id);
     }
     switch (ui.tab) {
       case 'kalender': return scrKalender();
       case 'listen': return scrListen();
       case 'training': return scrTraining();
       case 'personen': return scrPersonen();
+      case 'notizen': return scrNotizen();
       default: return scrHeute();
     }
   }
@@ -580,11 +676,13 @@
     const t = top();
     const fab = $('#fab');
     let hide = false, label = 'Neuer Eintrag';
-    if (t && (t.kind === 'settings' || t.kind === 'plan' || t.kind === 'person')) hide = true;
+    if (t && (t.kind === 'settings' || t.kind === 'plan' || t.kind === 'person' || t.kind === 'note')) hide = true;
     if (!t && ui.tab === 'training') label = 'Neuer Trainingsplan';
     if (!t && ui.tab === 'personen') label = 'Neue Person';
+    if (!t && ui.tab === 'notizen') label = 'Neue Notiz';
     fab.classList.toggle('hidden', hide);
     fab.setAttribute('aria-label', label);
+    $('#mic').classList.toggle('hidden', hide);
   }
   function buildTabbar() {
     $('#tabbar').innerHTML = '<span class="tab-ind" aria-hidden="true"></span>' + TABS.map((t) => '<button type="button" class="tab" data-act="tab" data-v="' + t.id + '">' + icon(t.icon) + '<span>' + t.label + '</span></button>').join('');
@@ -598,7 +696,16 @@
     show(anim || (from === to ? (wasStack ? 'pop' : 'fade') : (to > from ? 'tabL' : 'tabR')));
   }
   function push(entry) { ui.stack.push(entry); show('push'); }
-  function back() { if (!ui.stack.length) return; ui.stack.pop(); ui.resetArmed = false; show('pop'); }
+  function back() {
+    if (!ui.stack.length) return;
+    const t = top();
+    if (t.kind === 'note') {
+      if (ui.dictating) { stopListening(); ui.dictating = null; }
+      const n = noteById(t.id);
+      if (n && !n.title.trim() && !n.body.trim()) { data.notes = data.notes.filter((x) => x.id !== n.id); persist(); }
+    }
+    ui.stack.pop(); ui.resetArmed = false; show('pop');
+  }
   function openDetail(tab, entry) {
     if (ui.tab !== tab) { ui.tab = tab; ui.stack = [entry]; show('push'); }
     else push(entry);
@@ -623,7 +730,10 @@
     list: { title: (f) => (f.id ? 'Liste bearbeiten' : 'Neue Liste'), body: listForm, save: saveList },
     person: { title: (f) => (f.id ? 'Person bearbeiten' : 'Neue Person'), body: personForm, save: savePerson },
     plan: { title: (f) => (f.id ? 'Plan bearbeiten' : 'Neuer Trainingsplan'), body: planForm, save: savePlan },
-    tag: { title: (f) => (f.id ? 'Tag bearbeiten' : 'Neuer Tag'), body: tagForm, save: saveTag }
+    tag: { title: (f) => (f.id ? 'Tag bearbeiten' : 'Neuer Tag'), body: tagForm, save: saveTag },
+    notify: { title: () => 'Benachrichtigungen', body: notifyForm, save: null },
+    voice: { title: () => 'Sprachsteuerung', body: voiceBody, save: null },
+    voiceList: { title: (f) => (f.mode === 'add' ? 'Zur Liste hinzufügen' : 'Neue Liste'), body: voiceListForm, save: saveVoiceList }
   };
   function openSheet(kind, f, replace) {
     const wasOpen = !!ui.sheet;
@@ -656,6 +766,7 @@
   }
   function closeSheet() {
     if (!ui.sheet) return;
+    if (ui.sheet.kind === 'voice') { stopListening(); ui.voice = null; }
     ui.sheet = null;
     sheetRoot.classList.remove('open');
     const sh = $('.sheet', sheetRoot);
@@ -672,6 +783,7 @@
   function syncForm() {
     if (!ui.sheet) return;
     $$('[data-f]', sheetRoot).forEach((el) => { if (el.matches('input,select,textarea')) ui.sheet.f[el.dataset.f] = el.value; });
+    $$('[data-ex]', sheetRoot).forEach((el) => { const e = (ui.sheet.f.exercises || [])[+el.dataset.ex]; if (e) e[el.dataset.k] = el.value; });
   }
   function bindSheetDrag() {
     const sh = $('.sheet', sheetRoot);
@@ -755,7 +867,11 @@
   }
   function personForm(f) {
     return field('Name', 'name', f.name, 'text', 'Vor- und Nachname', { big: true, autofocus: true, attrs: 'autocomplete="off"' }) +
-      clearable('Geburtsdatum', 'birthday', f.birthday, 'date') +
+      '<div class="field"><span class="label">Geburtstag</span><div class="three">' +
+        '<select class="input" data-f="bday_d" aria-label="Tag"><option value="">Tag</option>' + Array.from({ length: 31 }, (_, i) => '<option value="' + (i + 1) + '"' + (String(f.bday_d) === String(i + 1) ? ' selected' : '') + '>' + (i + 1) + '.</option>').join('') + '</select>' +
+        '<select class="input" data-f="bday_m" aria-label="Monat"><option value="">Monat</option>' + MON.map((m, i) => '<option value="' + (i + 1) + '"' + (String(f.bday_m) === String(i + 1) ? ' selected' : '') + '>' + m + '</option>').join('') + '</select>' +
+        '<input class="input" data-f="bday_y" type="number" inputmode="numeric" placeholder="Jahr" aria-label="Jahr (optional)" value="' + esc(f.bday_y || '') + '">' +
+      '</div></div>' +
       field('Telefon', 'phone', f.phone, 'tel', 'z. B. 0176 …', { attrs: 'autocomplete="off"' }) +
       field('E-Mail', 'email', f.email, 'email', 'name@beispiel.de', { attrs: 'autocomplete="off"' }) +
       area('Adresse', 'address', f.address, 'Straße, PLZ Ort') +
@@ -768,13 +884,29 @@
     if (!(f.days || []).some(Boolean)) return '';
     return n + ' Einheiten';
   }
+  function exEditor(e, i) {
+    const sets = e.mode !== 'dauer';
+    return '<div class="ex-card">' +
+      '<div class="ex-top"><input class="input" data-ex="' + i + '" data-k="name" value="' + esc(e.name) + '" placeholder="Übung" aria-label="Name der Übung" autocomplete="off">' +
+      '<button type="button" class="icon-btn" data-act="ex-del" data-i="' + i + '" aria-label="Übung entfernen">' + icon('trash') + '</button></div>' +
+      '<div class="chips"><button type="button" class="chip' + (sets ? ' on' : '') + '" data-act="ex-mode" data-i="' + i + '" data-v="saetze" aria-pressed="' + sets + '">Sätze & Wdh.</button>' +
+      '<button type="button" class="chip' + (!sets ? ' on' : '') + '" data-act="ex-mode" data-i="' + i + '" data-v="dauer" aria-pressed="' + !sets + '">Dauer</button></div>' +
+      (sets
+        ? '<div class="two"><label class="field"><span>Sätze</span><input class="input" type="number" inputmode="numeric" min="1" data-ex="' + i + '" data-k="sets" value="' + esc(e.sets) + '"></label>' +
+          (e.failure ? '' : '<label class="field"><span>Wiederholungen</span><input class="input" type="number" inputmode="numeric" min="1" data-ex="' + i + '" data-k="reps" value="' + esc(e.reps) + '"></label>') + '</div>' +
+          '<button type="button" class="switch-row" role="switch" aria-checked="' + !!e.failure + '" data-act="ex-fail" data-i="' + i + '"><span>Bis Muskelversagen</span><span class="switch"></span></button>'
+        : '<label class="field"><span>Dauer (Minuten)</span><input class="input" type="number" inputmode="numeric" min="1" data-ex="' + i + '" data-k="dur" value="' + esc(e.dur) + '"></label>') +
+      '</div>';
+  }
   function planForm(f) {
     return field('Name des Plans', 'name', f.name, 'text', 'z. B. Kraft & Ausdauer', { big: true, autofocus: true, attrs: 'autocomplete="off"' }) +
       '<div class="two">' + field('Start', 'start', f.start, 'date') + field('Ende', 'endDate', f.endDate, 'date') + '</div>' +
       '<div class="chips">' + [4, 6, 8, 12].map((w) => '<button type="button" class="chip" data-act="plan-dur" data-w="' + w + '">' + w + ' Wochen</button>').join('') + '</div>' +
       '<div class="field"><span class="label">Trainingstage</span><div class="days" data-group="days">' + WD.map((d, i) => '<button type="button" class="chip' + (f.days[i] ? ' on' : '') + '" data-act="f-day" data-i="' + i + '" aria-pressed="' + !!f.days[i] + '">' + d + '</button>').join('') + '</div></div>' +
       '<div class="two">' + clearable('Uhrzeit (optional)', 'time', f.time, 'time') + field('Dauer (optional)', 'dur', f.dur, 'number', 'Minuten', { attrs: 'inputmode="numeric" min="0"' }) + '</div>' +
-      area('Übungen & Notizen', 'notes', f.notes, 'Übungen …') +
+      '<div class="field"><span class="label">Übungen</span><div class="ex-list">' + (f.exercises || []).map(exEditor).join('') + '</div>' +
+        '<button type="button" class="btn secondary" data-act="ex-add">' + icon('plus') + 'Übung hinzufügen</button></div>' +
+      area('Notizen', 'notes', f.notes, 'Notizen …') +
       '<p class="data-note" id="plan-preview" style="margin:0">' + esc(planPreviewText(f)) + '</p>';
   }
   function tagForm(f) {
@@ -783,6 +915,215 @@
       '<div class="field"><span class="label">Farbe</span>' + swatches(f.color) + '</div>' +
       '<div class="preview">Vorschau: <span id="tag-preview">' + tagChip({ name: f.name || 'Tag', color: f.color }) + '</span></div>' +
       (t && !t.system ? '<button type="button" class="btn danger" data-act="tag-del" data-id="' + t.id + '">' + icon('trash') + 'Tag löschen</button>' : '');
+  }
+
+  // ---------- Benachrichtigungen ----------
+  const NOTIFY_ROWS = [
+    ['birthday', 'Geburtstage'], ['termin', 'Termine'], ['aufgabe', 'Aufgaben'], ['training', 'Training']
+  ];
+  function notifyForm() {
+    const n = data.settings.notify;
+    return NOTIFY_ROWS.map((r) => {
+      const c = n[r[0]];
+      let extra = '';
+      if (c.on) {
+        if (r[0] === 'termin') {
+          extra = '<div class="two"><label class="field"><span>Vorher</span><select class="input" data-n="termin.lead">' +
+            [['0', 'Zur Startzeit'], ['5', '5 Minuten'], ['15', '15 Minuten'], ['30', '30 Minuten'], ['60', '1 Stunde'], ['120', '2 Stunden'], ['1440', '1 Tag']].map((o) => '<option value="' + o[0] + '"' + (c.lead === o[0] ? ' selected' : '') + '>' + o[1] + '</option>').join('') +
+            '</select></label><label class="field"><span>Ganztägige um</span><input class="input" type="time" data-n="termin.time" value="' + esc(c.time) + '"></label></div>';
+        } else {
+          extra = '<label class="field"><span>' + (r[0] === 'birthday' ? 'Um' : 'Ohne Uhrzeit um') + '</span><input class="input" type="time" data-n="' + r[0] + '.time" value="' + esc(c.time) + '"></label>';
+        }
+      }
+      return '<div class="notify-block"><button type="button" class="switch-row" role="switch" aria-checked="' + !!c.on + '" data-act="notify-toggle" data-k="' + r[0] + '"><span>' + r[1] + '</span><span class="switch"></span></button>' + extra + '</div>';
+    }).join('');
+  }
+  let notifTimer = null, channelMade = false;
+  function scheduleNotifications() { clearTimeout(notifTimer); notifTimer = setTimeout(doSchedule, 900); }
+  const hash = (str) => { let h = 7; for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) | 0; return Math.abs(h) % 2000000000 + 1; };
+  async function doSchedule() {
+    const LN = plugin('LocalNotifications');
+    if (!LN) return;
+    try {
+      const n = data.settings.notify;
+      const pend = await LN.getPending();
+      if (pend && pend.notifications && pend.notifications.length) await LN.cancel({ notifications: pend.notifications.map((x) => ({ id: x.id })) });
+      if (!Object.keys(n).some((k) => n[k].on)) return;
+      const perm = await LN.checkPermissions();
+      if (perm.display !== 'granted') return;
+      if (!channelMade) { try { await LN.createChannel({ id: 'orbit', name: 'Erinnerungen', importance: 4, visibility: 1, vibration: true }); } catch (e) { /* egal */ } channelMade = true; }
+      const now = new Date(), t0 = today(), list = [];
+      const at = (d, hhmm, minus) => { const p = (hhmm || '09:00').split(':').map(Number); const x = new Date(d.getFullYear(), d.getMonth(), d.getDate(), p[0], p[1] || 0); if (minus) x.setMinutes(x.getMinutes() - minus); return x; };
+      const push = (key, when, title, body) => { if (when > now && list.length < 60) list.push({ id: hash(key + when.getTime()), title, body, schedule: { at: when, allowWhileIdle: true }, channelId: 'orbit', smallIcon: 'ic_stat_orbit', iconColor: '#000000', isExactNotification: false }); };
+      for (let i = 0; i < 21; i++) {
+        const d = addDays(t0, i);
+        rawFor(d).forEach((r) => {
+          if (r.kind === 'geburtstag' && n.birthday.on) push(r.key, at(d, n.birthday.time), r.p.name + ' hat Geburtstag', r.age != null ? 'wird ' + r.age : fmtDay(d));
+          else if (r.kind === 'termin' && n.termin.on) {
+            if (r.it.time) push(r.key, at(d, r.it.time, +n.termin.lead || 0), r.it.title, (+n.termin.lead >= 1440 ? fmtDay(d) + ', ' : '') + r.it.time + ' Uhr');
+            else push(r.key, at(d, n.termin.time), r.it.title, 'Heute, ganztägig');
+          } else if (r.kind === 'aufgabe' && n.aufgabe.on && !data.done[r.key]) push(r.key, at(d, r.it.time || n.aufgabe.time), r.it.title, r.it.time ? 'bis ' + r.it.time + ' Uhr' : 'Aufgabe für heute');
+          else if (r.kind === 'training' && n.training.on && !data.done[r.key] && !data.skipped[r.key]) push(r.key, at(d, r.pl.time || n.training.time), 'Training: ' + r.pl.name, r.pl.time ? r.pl.time + ' Uhr' : 'Heute steht Training an');
+        });
+      }
+      if (list.length) await LN.schedule({ notifications: list });
+    } catch (e) { /* Benachrichtigungen sind optional */ }
+  }
+  async function ensureNotifyPermission() {
+    const LN = plugin('LocalNotifications');
+    if (!LN) return true;
+    try {
+      let p = await LN.checkPermissions();
+      if (p.display !== 'granted') p = await LN.requestPermissions();
+      return p.display === 'granted';
+    } catch (e) { return false; }
+  }
+
+  // ---------- Sprachsteuerung ----------
+  let webRec = null;
+  function listenOnce(onResult, onError, onStopped) {
+    const sr = plugin('SpeechRecognition');
+    if (sr) {
+      (async () => {
+        try {
+          const av = await sr.available();
+          if (!av || !av.available) return onError('Spracherkennung ist auf diesem Handy nicht verfügbar.');
+          let p = await sr.checkPermissions();
+          if (p.speechRecognition !== 'granted') p = await sr.requestPermissions();
+          if (p.speechRecognition !== 'granted') return onError('Kein Zugriff aufs Mikrofon.');
+          try { await sr.removeAllListeners(); } catch (e) { /* egal */ }
+          sr.addListener('listeningState', (d) => { if (d && d.status === 'stopped' && onStopped) onStopped(); });
+          const res = await sr.start({ language: 'de-DE', maxResults: 1, partialResults: false, popup: false });
+          const text = res && res.matches && res.matches[0];
+          if (text) onResult(text); else onError('Nicht verstanden.');
+        } catch (e) {
+          const m = String((e && e.message) || e);
+          onError(/permission/i.test(m) ? 'Kein Zugriff aufs Mikrofon.' : /network/i.test(m) ? 'Keine Verbindung zur Spracherkennung.' : 'Nicht verstanden.');
+        }
+      })();
+      return;
+    }
+    const R = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!R) return onError('Spracherkennung ist hier nicht verfügbar.');
+    try {
+      webRec = new R(); webRec.lang = 'de-DE'; webRec.interimResults = false; webRec.maxAlternatives = 1;
+      let got = false;
+      webRec.onresult = (e) => { got = true; onResult(e.results[0][0].transcript); };
+      webRec.onerror = () => { if (!got) onError('Nicht verstanden.'); got = true; };
+      webRec.onend = () => { if (!got) onError('Nicht verstanden.'); };
+      webRec.start();
+    } catch (e) { onError('Spracherkennung ist hier nicht verfügbar.'); }
+  }
+  function stopListening() {
+    const sr = plugin('SpeechRecognition');
+    if (sr) sr.stop().catch(() => {});
+    if (webRec) { try { webRec.stop(); } catch (e) { /* egal */ } webRec = null; }
+  }
+  function voiceBody() {
+    const v = ui.voice || { state: 'error', text: '' };
+    const status = { listening: 'Ich höre zu …', working: 'Einen Moment …', error: v.msg || 'Nicht verstanden.', done: '' }[v.state] || '';
+    return '<div class="voice"><button type="button" class="voice-orb ' + v.state + '" data-act="voice-orb" aria-label="' + (v.state === 'listening' ? 'Zuhören beenden' : 'Nochmal sprechen') + '">' + icon('mic') + '</button>' +
+      '<div class="voice-status" role="status">' + esc(status) + '</div>' +
+      (v.text ? '<div class="voice-text">„' + esc(v.text) + '“</div>' : '') + '</div>' +
+      (v.state === 'error' ? field('Oder eintippen', 'vtext', v.text || '', 'text', 'z. B. Zahnarzt Freitag 15 Uhr', { attrs: 'autocomplete="off" enterkeyhint="go"' }) +
+        '<button type="button" class="btn primary" data-act="voice-apply">Übernehmen</button>' : '');
+  }
+  function startVoice() {
+    const token = (ui.voiceToken = (ui.voiceToken || 0) + 1);
+    ui.voice = { state: 'listening', text: '' };
+    if (ui.sheet && ui.sheet.kind === 'voice') renderSheetBody();
+    const alive = () => token === ui.voiceToken && ui.sheet && ui.sheet.kind === 'voice';
+    listenOnce(
+      (text) => { if (!alive()) return; ui.voice = { state: 'done', text }; renderSheetBody(); setTimeout(() => { if (alive()) applyVoice(text); }, 550); },
+      (msg) => { if (!alive()) return; ui.voice = { state: 'error', msg, text: '' }; renderSheetBody(); },
+      () => { if (!alive() || ui.voice.state !== 'listening') return; ui.voice.state = 'working'; renderSheetBody(); }
+    );
+  }
+  function personFormData(p) {
+    const b = bdInfo(p.birthday);
+    return Object.assign({}, p, { bday_d: b ? b.d : '', bday_m: b ? b.m : '', bday_y: b && b.y ? b.y : '' });
+  }
+  function applyVoice(text) {
+    const r = window.OrbitVoice ? window.OrbitVoice.parse(text, { now: new Date(), tags: data.tags, lists: data.lists }) : null;
+    if (!r) { ui.voice = { state: 'error', msg: 'Nicht verstanden.', text }; renderSheetBody(); return; }
+    if (r.kind === 'entry') openSheet('entry', Object.assign({}, r.f, { pauseTouched: false }), true);
+    else if (r.kind === 'person') openSheet('person', personFormData(r.f), true);
+    else if (r.kind === 'list-new' || r.kind === 'list-add') {
+      openSheet('voiceList', { mode: r.kind === 'list-add' && r.listId ? 'add' : 'new', name: r.name, listId: r.listId || '', color: PALETTE[data.lists.length % 9].id, items: r.items.join('\n') }, true);
+    } else if (r.kind === 'note') {
+      closeSheet();
+      const n = { id: uid(), title: r.title || '', body: r.body || '', created: Date.now(), updated: Date.now() };
+      data.notes.push(n); persist();
+      openDetail('notizen', { kind: 'note', id: n.id });
+      toast('Notiz angelegt');
+    }
+  }
+  function voiceListForm(f) {
+    return (f.mode === 'add'
+      ? '<div class="field"><span class="label">Liste</span>' + chipGroup('listId', data.lists.map((l) => ({ v: l.id, label: l.name, color: l.color })), f.listId) + '</div>'
+      : field('Name der Liste', 'name', f.name, 'text', 'Name', { big: true, attrs: 'autocomplete="off"' }) + '<div class="field"><span class="label">Farbe</span>' + swatches(f.color) + '</div>') +
+      area('Punkte', 'items', f.items, 'Ein Punkt pro Zeile');
+  }
+  function saveVoiceList() {
+    syncForm();
+    const f = ui.sheet.f;
+    const items = String(f.items || '').split('\n').map((x) => x.trim()).filter(Boolean);
+    let id = f.listId;
+    if (f.mode === 'add') {
+      if (!listById(id)) return sheetErr('Bitte eine Liste wählen.');
+    } else {
+      const name = (f.name || '').trim();
+      if (!name) return sheetErr('Bitte einen Namen eingeben.');
+      id = uid();
+      data.lists.push({ id, name, color: f.color || 'grau' });
+    }
+    items.forEach((t) => data.items.push({ id: uid(), type: 'aufgabe', title: t, date: '', endDate: '', time: '', end: '', repeat: 'none', repeatDays: null, pauseVacation: false, tagId: '', listId: id }));
+    persist();
+    closeSheet();
+    ui.tab = 'listen'; ui.stack = [{ kind: 'list', id }];
+    show('push');
+    toast(f.mode === 'add' ? items.length + (items.length === 1 ? ' Punkt' : ' Punkte') + ' hinzugefügt' : 'Liste angelegt');
+  }
+  // Diktieren in einer Notiz
+  function dictateNote(id) {
+    if (ui.dictating) { stopListening(); ui.dictating = null; show('none'); return; }
+    ui.dictating = id; show('none');
+    listenOnce((text) => {
+      ui.dictating = null;
+      const n = noteById(id);
+      if (n) {
+        const ta = $('#note-body');
+        const cur = ta ? ta.value : n.body;
+        n.body = (cur && !/\s$/.test(cur) ? cur + ' ' : cur || '') + text.charAt(0).toUpperCase() + text.slice(1);
+        n.updated = Date.now(); persist();
+      }
+      show('none');
+      const ta2 = $('#note-body'); if (ta2) { ta2.scrollTop = ta2.scrollHeight; }
+    }, (msg) => { ui.dictating = null; show('none'); toast(msg); });
+  }
+
+  // ---------- Kleines Auswahlmenü (Training ✕) ----------
+  const popover = $('#popover');
+  function openPopover(anchor, html) {
+    popover.innerHTML = html;
+    const app = $('#app').getBoundingClientRect(), r = anchor.getBoundingClientRect();
+    popover.classList.remove('open');
+    popover.style.visibility = 'hidden'; popover.style.display = 'flex';
+    const h = popover.offsetHeight, w = popover.offsetWidth;
+    let topPx = r.bottom - app.top + 6;
+    if (topPx + h > app.height - 80) topPx = r.top - app.top - h - 6;
+    const leftPx = Math.max(12, Math.min(r.left - app.left, app.width - w - 12));
+    popover.style.top = topPx + 'px'; popover.style.left = leftPx + 'px';
+    popover.style.visibility = '';
+    popover.style.transformOrigin = (r.left - app.left - leftPx + 14) + 'px ' + (topPx > r.top - app.top ? '0' : '100%');
+    requestAnimationFrame(() => popover.classList.add('open'));
+    const first = popover.querySelector('button'); if (first) first.focus({ preventScroll: true });
+  }
+  function closePopover() {
+    if (!popover.classList.contains('open')) return false;
+    popover.classList.remove('open');
+    setTimeout(() => { if (!popover.classList.contains('open')) popover.style.display = 'none'; }, 180);
+    return true;
   }
 
   // ---------- Speichern ----------
@@ -835,9 +1176,17 @@
     syncForm();
     const f = ui.sheet.f, name = (f.name || '').trim();
     if (!name) return sheetErr('Bitte einen Namen eingeben.');
-    if (f.birthday && !isDate(f.birthday)) return sheetErr('Das Geburtsdatum ist ungültig.');
-    if (f.birthday && f.birthday > ymd(today())) return sheetErr('Das Geburtsdatum liegt in der Zukunft.');
-    const rec = { name, birthday: f.birthday || '', phone: (f.phone || '').trim(), email: (f.email || '').trim(), address: (f.address || '').trim(), note: (f.note || '').trim() };
+    let birthday = '';
+    const bd = +f.bday_d || 0, bm = +f.bday_m || 0, by = String(f.bday_y || '').trim();
+    if (bd || bm || by) {
+      if (!bd || !bm) return sheetErr('Bitte Tag und Monat wählen.');
+      const yy = by ? +by : 2000;
+      if (by && (!/^\d{4}$/.test(by) || yy < 1900 || yy > today().getFullYear())) return sheetErr('Das Jahr ist ungültig.');
+      if (new Date(yy, bm - 1, bd).getDate() !== bd) return sheetErr('Diesen Tag gibt es in dem Monat nicht.');
+      birthday = by ? by + '-' + pad(bm) + '-' + pad(bd) : '--' + pad(bm) + '-' + pad(bd);
+      if (by && birthday > ymd(today())) return sheetErr('Das Geburtsdatum liegt in der Zukunft.');
+    }
+    const rec = { name, birthday, phone: (f.phone || '').trim(), email: (f.email || '').trim(), address: (f.address || '').trim(), note: (f.note || '').trim() };
     let id = f.id;
     if (id) { const p = personById(id); if (p) Object.assign(p, rec); }
     else { id = uid(); data.people.push(Object.assign({ id }, rec)); }
@@ -853,7 +1202,8 @@
     if (!isDate(f.start) || !isDate(f.endDate)) return sheetErr('Bitte Start und Ende wählen.');
     if (f.endDate < f.start) return sheetErr('Das Ende liegt vor dem Start.');
     if (!f.days.some(Boolean)) return sheetErr('Bitte mindestens einen Trainingstag wählen.');
-    const rec = { name, start: f.start, end: f.endDate, days: f.days.slice(), time: f.time || '', dur: String(f.dur || '').trim(), notes: f.notes || '' };
+    const exercises = (f.exercises || []).filter((e) => (e.name || '').trim()).map((e) => ({ id: e.id || uid(), name: e.name.trim(), mode: e.mode === 'dauer' ? 'dauer' : 'saetze', sets: String(e.sets || '').trim(), reps: String(e.reps || '').trim(), failure: !!e.failure, dur: String(e.dur || '').trim() }));
+    const rec = { name, start: f.start, end: f.endDate, days: f.days.slice(), time: f.time || '', dur: String(f.dur || '').trim(), notes: f.notes || '', exercises };
     let id = f.id;
     if (id) { const p = planById(id); if (p) Object.assign(p, rec); }
     else { id = uid(); data.plans.push(Object.assign({ id }, rec)); }
@@ -956,7 +1306,7 @@
     },
     toggle: (el) => {
       const k = el.dataset.key;
-      if (data.done[k]) delete data.done[k]; else data.done[k] = true;
+      if (data.done[k]) delete data.done[k]; else { data.done[k] = true; delete data.skipped[k]; }
       persist();
       ui.popKey = k;
       if (navigator.vibrate && data.done[k]) navigator.vibrate(12);
@@ -971,6 +1321,7 @@
       const t = top();
       if (!t && ui.tab === 'training') return A['plan-new']();
       if (!t && ui.tab === 'personen') return A['person-new']();
+      if (!t && ui.tab === 'notizen') return A['note-new']();
       const base = { type: 'termin', title: '', date: ymd(today()), endDate: '', time: '', end: '', repeat: 'none', repeatDays: null, pauseVacation: false, tagId: '', listId: '', noDate: false };
       if (!t && ui.tab === 'kalender') base.date = ui.selDay || ymd(today());
       if (!t && ui.tab === 'listen') { base.type = 'aufgabe'; }
@@ -998,9 +1349,9 @@
         ui.stack.pop();
       }, () => show('pop'));
     },
-    'plan-new': () => openSheet('plan', { name: '', start: ymd(today()), endDate: ymd(addDays(today(), 8 * 7 - 1)), days: WD.map(() => false), time: '', dur: '', notes: '' }),
+    'plan-new': () => openSheet('plan', { name: '', start: ymd(today()), endDate: ymd(addDays(today(), 8 * 7 - 1)), days: WD.map(() => false), time: '', dur: '', notes: '', exercises: [] }),
     'plan-open': (el) => { ui.scrollToToday = true; openDetail('training', { kind: 'plan', id: el.dataset.id }); },
-    'plan-edit': (el) => { const p = planById(el.dataset.id); if (p) openSheet('plan', { id: p.id, name: p.name, start: p.start, endDate: p.end, days: p.days.slice(), time: p.time, dur: p.dur, notes: p.notes }); },
+    'plan-edit': (el) => { const p = planById(el.dataset.id); if (p) openSheet('plan', { id: p.id, name: p.name, start: p.start, endDate: p.end, days: p.days.slice(), time: p.time, dur: p.dur, notes: p.notes, exercises: (p.exercises || []).map((e) => Object.assign({}, e)) }); },
     'plan-del': (el) => {
       const id = el.dataset.id;
       removeWithUndo('Trainingsplan gelöscht', () => { data.plans = data.plans.filter((p) => p.id !== id); ui.stack.pop(); }, () => show('pop'));
@@ -1012,9 +1363,62 @@
       f.start = s; f.endDate = ymd(addDays(parseD(s), Number(el.dataset.w) * 7 - 1));
       renderSheetBody();
     },
-    'person-new': () => openSheet('person', { name: '', birthday: '', phone: '', email: '', address: '', note: '' }),
+    'person-new': () => openSheet('person', { name: '', birthday: '', bday_d: '', bday_m: '', bday_y: '', phone: '', email: '', address: '', note: '' }),
     'person-open': (el) => openDetail('personen', { kind: 'person', id: el.dataset.id }),
-    'person-edit': (el) => { const p = personById(el.dataset.id); if (p) openSheet('person', Object.assign({}, p)); },
+    'person-edit': (el) => { const p = personById(el.dataset.id); if (p) openSheet('person', personFormData(p)); },
+    // Training nicht gemacht
+    skip: (el) => {
+      const k = el.dataset.key, cur = data.skipped[k];
+      openPopover(el, '<span class="pop-title">Nicht gemacht, weil …</span>' +
+        Object.keys(SKIP).map((r) => '<button type="button" role="menuitem" class="pop-item' + (cur === r ? ' on' : '') + '" data-act="skip-set" data-key="' + esc(k) + '" data-v="' + r + '">' + SKIP[r] + '</button>').join('') +
+        (cur ? '<button type="button" role="menuitem" class="pop-item muted" data-act="skip-set" data-key="' + esc(k) + '" data-v="">Zurücksetzen</button>' : ''));
+    },
+    'skip-set': (el) => {
+      const k = el.dataset.key, v = el.dataset.v;
+      if (v) { data.skipped[k] = v; delete data.done[k]; } else delete data.skipped[k];
+      persist(); closePopover(); show('none');
+      if (v) toast('Ausgelassen: ' + SKIP[v]);
+    },
+    // Übungen im Plan-Formular
+    'ex-add': () => {
+      syncForm();
+      const f = ui.sheet.f; f.exercises = f.exercises || [];
+      f.exercises.push({ id: uid(), name: '', mode: 'saetze', sets: '3', reps: '10', failure: false, dur: '' });
+      renderSheetBody();
+      const ins = $$('[data-k="name"]', sheetRoot); const last = ins[ins.length - 1];
+      if (last) { last.focus(); last.scrollIntoView({ block: 'center', behavior: 'smooth' }); }
+    },
+    'ex-del': (el) => { syncForm(); ui.sheet.f.exercises.splice(+el.dataset.i, 1); renderSheetBody(); },
+    'ex-mode': (el) => { syncForm(); const e = ui.sheet.f.exercises[+el.dataset.i]; if (e) e.mode = el.dataset.v; renderSheetBody(); },
+    'ex-fail': (el) => { syncForm(); const e = ui.sheet.f.exercises[+el.dataset.i]; if (!e) return; e.failure = !e.failure; el.setAttribute('aria-checked', e.failure); setTimeout(renderSheetBody, 200); },
+    // Benachrichtigungen
+    notify: () => openSheet('notify', {}),
+    'notify-toggle': async (el) => {
+      const k = el.dataset.k, c = data.settings.notify[k];
+      const turnOn = !c.on;
+      el.setAttribute('aria-checked', turnOn);
+      if (turnOn && !(await ensureNotifyPermission())) { el.setAttribute('aria-checked', 'false'); toast('Benachrichtigungen sind für Orbit nicht erlaubt.'); return; }
+      c.on = turnOn; persist();
+      setTimeout(() => { renderSheetBody(); show('none'); }, 200);
+    },
+    // Sprachsteuerung
+    voice: () => { openSheet('voice', {}); startVoice(); },
+    'voice-orb': () => { if (ui.voice && ui.voice.state === 'listening') { stopListening(); } else startVoice(); },
+    'voice-apply': () => { syncForm(); const t = (ui.sheet.f.vtext || '').trim(); if (t) applyVoice(t); },
+    // Notizen
+    'note-new': () => {
+      const n = { id: uid(), title: '', body: '', created: Date.now(), updated: Date.now() };
+      data.notes.push(n); persist();
+      openDetail('notizen', { kind: 'note', id: n.id });
+      setTimeout(() => { const ti = $('#note-title'); if (ti) ti.focus(); }, 420);
+    },
+    'note-open': (el) => openDetail('notizen', { kind: 'note', id: el.dataset.id }),
+    'note-del': (el) => {
+      const id = el.dataset.id;
+      if (ui.dictating) { stopListening(); ui.dictating = null; }
+      removeWithUndo('Notiz gelöscht', () => { data.notes = data.notes.filter((n) => n.id !== id); ui.stack.pop(); }, () => show('pop'));
+    },
+    'note-dictate': (el) => dictateNote(el.dataset.id),
     'person-del': (el) => {
       const id = el.dataset.id;
       removeWithUndo('Person gelöscht', () => { data.people = data.people.filter((p) => p.id !== id); ui.stack.pop(); }, () => show('pop'));
@@ -1041,7 +1445,8 @@
       if (!ui.resetArmed) { ui.resetArmed = true; show('none'); setTimeout(() => { if (ui.resetArmed) { ui.resetArmed = false; if (top() && top().kind === 'settings') show('none'); } }, 4000); return; }
       ui.resetArmed = false;
       const theme = data.settings.theme;
-      removeWithUndo('Alle Daten gelöscht', () => { data = defaultData(); data.settings.theme = theme; });
+      const imports = data.imports;
+      removeWithUndo('Alle Daten gelöscht', () => { data = defaultData(); data.settings.theme = theme; data.imports = imports; });
     },
     undo: () => {
       if (!toastUndo) return;
@@ -1103,6 +1508,7 @@
   }
 
   document.addEventListener('click', (e) => {
+    if (popover.classList.contains('open') && !e.target.closest('#popover')) { closePopover(); if (!e.target.closest('[data-act="skip"]')) return; }
     const el = e.target.closest('[data-act]');
     if (!el) return;
     const fn = A[el.dataset.act];
@@ -1135,6 +1541,18 @@
         const n = $('#notes-saved'); if (n) { n.classList.add('show'); setTimeout(() => n.classList.remove('show'), 1200); }
       }, 400);
     }
+    if (el.dataset && (el.dataset.autosave === 'note-title' || el.dataset.autosave === 'note-body')) {
+      const n = noteById(el.dataset.id);
+      if (!n) return;
+      if (el.dataset.autosave === 'note-title') n.title = el.value; else n.body = el.value;
+      n.updated = Date.now();
+      clearTimeout(notesTimer);
+      notesTimer = setTimeout(() => { persist(); const s2 = $('#notes-saved'); if (s2) { s2.classList.add('show'); setTimeout(() => s2.classList.remove('show'), 1000); } }, 500);
+    }
+    if (el.dataset && el.dataset.n) {
+      const parts = el.dataset.n.split('.');
+      data.settings.notify[parts[0]][parts[1]] = el.value; persist();
+    }
     if (ui.sheet && el.dataset && el.dataset.f === 'name' && ui.sheet.kind === 'tag') { ui.sheet.f.name = el.value; updateTagPreview(); }
   });
   document.addEventListener('change', (e) => {
@@ -1149,8 +1567,11 @@
     renderSheetBody();
   });
   document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && closePopover()) return;
     if (e.key === 'Escape' && ui.sheet) closeSheet();
-    if (e.key === 'Enter' && ui.sheet && e.target.matches('input.input') && e.target.type !== 'date' && e.target.type !== 'time') {
+    if (e.key === 'Enter' && e.target.id === 'note-title') { e.preventDefault(); const b = $('#note-body'); if (b) b.focus(); return; }
+    if (e.key === 'Enter' && ui.sheet && ui.sheet.kind === 'voice' && e.target.matches('input')) { e.preventDefault(); A['voice-apply'](); return; }
+    if (e.key === 'Enter' && ui.sheet && e.target.matches('input.input') && !e.target.matches('[data-ex]') && e.target.type !== 'date' && e.target.type !== 'time') {
       e.preventDefault();
       const cfg = SHEETS[ui.sheet.kind]; if (cfg && cfg.save) cfg.save();
     }
@@ -1194,11 +1615,13 @@
   const appPlugin = plugin('App');
   if (appPlugin) {
     appPlugin.addListener('backButton', () => {
+      if (closePopover()) return;
       if (ui.sheet) closeSheet();
       else if (ui.stack.length) back();
       else if (ui.tab !== 'heute') switchTab('heute');
       else if (appPlugin.minimizeApp) appPlugin.minimizeApp(); else appPlugin.exitApp();
     });
+    appPlugin.addListener('resume', () => { scheduleNotifications(); });
     appPlugin.addListener('resume', () => { if (ymd(today()) !== lastDay) { lastDay = ymd(today()); ui.selDay = ''; show('none'); } });
   }
 })();

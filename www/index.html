@@ -23,11 +23,16 @@
   <button id="fab" class="fab" type="button" data-act="fab" aria-label="Neuer Eintrag">
     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
   </button>
+  <button id="mic" class="mic" type="button" data-act="voice" aria-label="Sprachsteuerung">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3ZM19 11a7 7 0 0 1-14 0M12 18v3M9 21h6"/></svg>
+  </button>
   <nav id="tabbar" aria-label="Hauptnavigation"></nav>
+  <div id="popover" class="popover" role="menu"></div>
   <div id="toast" role="status" aria-live="polite"></div>
   <div id="sheet-root"></div>
   <input type="file" id="import-file" accept="application/json,.json,text/plain" hidden>
 </div>
+<script src="voice.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
